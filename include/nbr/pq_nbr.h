@@ -140,6 +140,11 @@ namespace pipeann {
       LOG(INFO) << "Compressed data written in: " << std::chrono::duration<double>(end - start).count() << "s.";
     }
 
+    /* Encode point as PQ code and store at data[loc * n_chunks]; resize data if needed \
+     * `point`: raw vector of dimension pq_table.ndims \
+     * `loc`: node location; used as the index into the global code table \
+     * Acquires pq_mu write lock; O(ndims) for deflation plus one possible resize
+     */
     void insert(T *point, uint32_t loc) {
       std::vector<uint8_t> pq_coords(pq_table.n_chunks);
       std::vector<float> fp_vec(pq_table.ndims);

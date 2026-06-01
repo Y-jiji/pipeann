@@ -129,8 +129,10 @@ class DynamicIndex : public BaseDynamicIndex {
     const std::string tags_path = cur_index_prefix_ + "_disk.index.tags";
     mem_index_->save_tags(tags_path);
 
-    // re-build
-    this->build(data_path, cur_index_prefix_, tags_path.c_str(), false);
+    // re-build. Forward R/L from params_ so the initial disk build matches
+    // the parameters the caller wanted for inserts (used by the insert-only
+    // benchmark; default 0 preserves the auto-configured path).
+    this->build(data_path, cur_index_prefix_, tags_path.c_str(), false, params_.R, params_.L);
     this->load(cur_index_prefix_, true);  // here sets use_disk_index_ to true.
     LOG(INFO) << "Transform memory index to disk index done.";
   }

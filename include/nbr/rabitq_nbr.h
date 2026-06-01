@@ -328,6 +328,9 @@ namespace pipeann {
       this->save(index_prefix.c_str());
     }
 
+    /* Insert not supported — always exits with error \
+     * RaBitQNeighbor cannot be used with direct insert (OdinANN); use PQNeighbor instead
+     */
     void insert(T *point, uint32_t loc) {
       LOG(ERROR) << "Update is not supported by RaBitQNeighbor.";
       exit(-1);

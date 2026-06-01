@@ -7,6 +7,10 @@
 #include "ssd_index_defs.h"
 
 namespace pipeann {
+  /* Abstract neighbor handler — interface for PQ and RaBitQ approximate distance computation \
+   * Implementors store per-point quantized codes in a global table indexed by node ID \
+   * `initialize_query` precomputes query-side lookup tables; `compute_dists` batch-estimates distances
+   */
   template<typename T>
   class AbstractNeighbor {
    public:

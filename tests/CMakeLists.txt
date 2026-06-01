@@ -10,6 +10,9 @@ target_link_libraries(overall_performance ${PROJECT_NAME})
 add_executable(test_insert_search test_insert_search.cpp)
 target_link_libraries(test_insert_search ${PROJECT_NAME})
 
+add_executable(test_insert_only test_insert_only.cpp)
+target_link_libraries(test_insert_only ${PROJECT_NAME})
+
 add_executable(overall_perf_mem overall_perf_mem.cpp)
 target_link_libraries(overall_perf_mem ${PROJECT_NAME})
 
@@ -30,3 +33,6 @@ target_link_libraries(build_disk_index_filtered ${PROJECT_NAME})
 
 add_executable(search_disk_index_filtered search_disk_index_filtered.cpp)
 target_link_libraries(search_disk_index_filtered ${PROJECT_NAME})
+
+add_executable(bench_loop bench_loop.cpp)
+target_link_libraries(bench_loop ${PROJECT_NAME})

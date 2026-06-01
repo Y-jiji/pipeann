@@ -36,7 +36,7 @@ if(USE_TCMALLOC)
     target_link_libraries(${PROJECT_NAME} PUBLIC tcmalloc)
 endif()
 
-target_link_libraries(${PROJECT_NAME} PUBLIC ${BLAS_LIBRARIES} OpenMP::OpenMP_CXX)
+target_link_libraries(${PROJECT_NAME} PUBLIC cblas ${BLAS_LIBRARIES} OpenMP::OpenMP_CXX)
 
 # python module.
 # pip install "pybind11[global]"
