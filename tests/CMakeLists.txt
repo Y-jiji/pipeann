@@ -36,3 +36,10 @@ target_link_libraries(search_disk_index_filtered ${PROJECT_NAME})
 
 add_executable(bench_loop bench_loop.cpp)
 target_link_libraries(bench_loop ${PROJECT_NAME})
+
+add_executable(sift100m_bench sift100m_bench.cpp)
+find_package(Arrow REQUIRED HINTS $ENV{HOME}/.local)
+find_package(Parquet REQUIRED HINTS $ENV{HOME}/.local)
+target_link_libraries(sift100m_bench
+    PRIVATE pipeann Arrow::arrow_shared Parquet::parquet_shared
+    pthread aio)
