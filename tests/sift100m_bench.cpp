@@ -329,7 +329,10 @@ int main() {
         auto *wrapper = new PretrainedPQ(pq_nbr);
         pipeann::build_disk_index<uint8_t, uint32_t>(
             batch0_bin.c_str(), index_prefix.c_str(),
-            MAX_DEGREE, L_BUILD, /*M=*/0, threads, PQ_CHUNKS,
+            // WHY M=64: pipeann's partition_one_data_file loops while
+            // estimated RAM > budget; M=0 → infinite split. 64GB is enough
+            // for any single BATCH ≤ 20M points to fit in one partition.
+            MAX_DEGREE, L_BUILD, /*M=*/64, threads, PQ_CHUNKS,
             pipeann::Metric::L2, /*tag_file=*/nullptr,
             wrapper, /*attr_writer=*/nullptr);
         uint64_t build_elapsed_ns =
