@@ -429,7 +429,7 @@ int main() {
                             uint32_t gid = (uint32_t)(base_offset + i);
                             ssd->insert_in_place(
                                 batch_data.data() + i * DIM, gid);
-                            { Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = base_offset + i; r.tid = tid; }
+                            { Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = i; r.tid = tid; }
                             done.fetch_add(1, std::memory_order_relaxed);
                         }
                     });
