@@ -196,7 +196,7 @@ struct Row {
     uint64_t    batch_elapsed_ns = 0;
 };
 
-static void flush(std::shared_ptr<parquet::arrow::FileWriter> &w,
+static void flush(std::unique_ptr<parquet::arrow::FileWriter> &w,
                   const std::vector<Row> &rows,
                   const std::shared_ptr<arrow::Schema> &schema) {
     if (rows.empty()) return;
@@ -225,8 +225,9 @@ static void flush(std::shared_ptr<parquet::arrow::FileWriter> &w,
     std::vector<std::shared_ptr<arrow::ArrayBuilder>> ch{dist_b, id_b, val_b};
     auto sb = std::make_shared<arrow::StructBuilder>(
         arrow::struct_(rf), pool, ch);
+    // 2-arg constructor: type is inferred from sb->type()
     auto lb = std::make_shared<arrow::ListBuilder>(
-        pool, sb, arrow::field("item", arrow::struct_(rf), true));
+        pool, std::static_pointer_cast<arrow::ArrayBuilder>(sb));
     for (auto &r : rows) {
         if (r.has_results) {
             lb->Append().ok();
@@ -336,16 +337,17 @@ int main() {
                 std::chrono::steady_clock::now() - build_t0).count();
 
         // ── STEP 3: open SSDIndex for streaming ─────────────────────────────
-        auto reader = std::make_shared<LinuxAlignedFileReader>();
+        std::shared_ptr<AlignedFileReader> reader = std::make_shared<LinuxAlignedFileReader>();
         auto *search_pq = new pipeann::PQNeighbor<uint8_t>(pipeann::Metric::L2);
         pipeann::IndexBuildParameters idx_params;
         idx_params.R           = MAX_DEGREE;
         idx_params.L           = L_BUILD;
         idx_params.alpha       = ALPHA;
         idx_params.num_threads = threads;
-        auto ssd = std::make_unique<pipeann::SSDIndex<uint8_t, uint32_t>>(
+        auto *ssd_raw = new pipeann::SSDIndex<uint8_t, uint32_t>(
             pipeann::Metric::L2, reader, search_pq,
             /*tags=*/true, &idx_params);
+        std::unique_ptr<pipeann::SSDIndex<uint8_t, uint32_t>> ssd(ssd_raw);
         ssd->load(index_prefix.c_str(), /*enable_writes=*/true);
 
         // load queries (raw uint8, no header)
@@ -366,7 +368,7 @@ int main() {
             uint64_t base_offset = b * BATCH;
             // LEAK tag string — pointer stays valid for the lifetime of the run
             const char *ins_tag =
-                new std::string("insert_" + std::to_string(b))->c_str();
+                (new std::string("insert_" + std::to_string(b)))->c_str();
 
             std::vector<Row> batch_rows;
 
@@ -385,7 +387,7 @@ int main() {
                         uint64_t lo = BATCH * tid / threads;
                         uint64_t hi = BATCH * (tid+1) / threads;
                         for (uint64_t i = lo; i < hi; i++) {
-                            batch_rows[i] = {ins_tag, "insert", i, tid};
+                            { Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = i; r.tid = tid; }
                             done.fetch_add(1, std::memory_order_relaxed);
                         }
                     });
@@ -427,8 +429,7 @@ int main() {
                             uint32_t gid = (uint32_t)(base_offset + i);
                             ssd->insert_in_place(
                                 batch_data.data() + i * DIM, gid);
-                            batch_rows[i] = {
-                                ins_tag, "insert", base_offset + i, tid};
+                            { Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = base_offset + i; r.tid = tid; }
                             done.fetch_add(1, std::memory_order_relaxed);
                         }
                     });
@@ -457,12 +458,12 @@ int main() {
             for (int ci = 0; ci < N_CFGS; ci++) {
                 auto cfg = SEARCH_CFGS[ci];
                 // LEAK tag string
-                const char *stag = new std::string(
+                const char *stag = (new std::string(
                     "search_b" + std::to_string(sbid) +
                     "_" + std::to_string(cfg.k) +
                     "_" + std::to_string(cfg.beam) +
                     "_" + std::to_string(cfg.starts)
-                )->c_str();
+                ))->c_str();
 
                 std::atomic<uint64_t> done(0);
                 std::mutex mu; std::condition_variable cv; bool stop = false;
