@@ -1,5 +1,7 @@
 #pragma once
 
+struct Sift100mPipeannBench; // forward-decl for friend access
+
 #include "utils/libcuckoo/cuckoohash_map.hh"
 #include "utils.h"
 #include <immintrin.h>
@@ -165,6 +167,7 @@ namespace pipeann {
       }
     }
 
+   friend struct ::Sift100mPipeannBench;
    private:
     // PQ data
     // pq_table.n_chunks = # of chunks ndims is split into
