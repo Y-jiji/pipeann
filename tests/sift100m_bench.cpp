@@ -484,9 +484,17 @@ int main() {
                         std::vector<float>    rdists(cfg.k);
                         for (uint64_t qi = lo; qi < hi; qi++) {
                             const uint8_t *q = queries.data() + qi * DIM;
+                            // WHY beam_width=8: pipeann's beam_search takes
+                            // l_search (candidate list, our cfg.beam) AND
+                            // beam_width (disk-fanout per BFS step) as SEPARATE
+                            // params. beam_width is bounded by per-thread
+                            // scratch (256 buffers / 128 threads = 2/thread);
+                            // cfg.beam=256 here overflows. Pipeann's own tests
+                            // hardcode beam_width=8 (test_insert_only:153,
+                            // bench_loop:139, utils.h:354).
                             ssd->beam_search(q, cfg.k, /*mem_L=*/0, cfg.beam,
                                              rids.data(), rdists.data(),
-                                             cfg.beam);
+                                             /*beam_width=*/8);
                             std::vector<std::tuple<double,uint32_t,uint64_t>>
                                 rv;
                             rv.reserve(cfg.k);
