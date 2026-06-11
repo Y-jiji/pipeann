@@ -317,6 +317,9 @@ namespace pipeann {
 
     int cur_n_in = 0, cur_tot = 0;
     while (!terminate()) {
+      if (stats != nullptr) {
+        stats->n_hops++;
+      }
       auto [n_in, n_out] = poll_all();
       std::ignore = n_in;
       std::ignore = n_out;
