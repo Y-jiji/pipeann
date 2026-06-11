@@ -196,8 +196,10 @@ namespace pipeann {
     // out_writeback_ns_abs (if non-null): receives steady_clock::now() ns at the
     // boundary between target-node commit (page buffer + tag table) and the reverse-edge
     // update loop. Mirrors hermes's `insert-writeback` event semantic.
+    // out_hops (if non-null): receives the n_hops from the during-insert forward search.
     int insert_in_place(const T *point, const TagT &tag, const Attributes *attrs = nullptr,
-                        uint64_t *out_writeback_ns_abs = nullptr);
+                        uint64_t *out_writeback_ns_abs = nullptr,
+                        uint64_t *out_hops = nullptr);
 
     // Merge deletes (NOTE: index read-only during merge.)
     // Returns id_map: old_id -> new_id.

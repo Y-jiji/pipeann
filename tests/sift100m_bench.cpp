@@ -186,6 +186,7 @@ static std::shared_ptr<arrow::Schema> make_schema() {
         arrow::field("start",            arrow::uint64(), true),
         arrow::field("insert-writeback", arrow::uint64(), true),
         arrow::field("end",              arrow::uint64(), true),
+        arrow::field("hops",             arrow::uint64(), true),
     });
 }
 
@@ -203,6 +204,8 @@ struct Row {
     uint64_t    op_start_ns      = 0;
     uint64_t    op_writeback_ns  = 0;
     uint64_t    op_end_ns        = 0;
+    bool        has_hops         = false;
+    uint64_t    hops             = 0;
 };
 
 static void flush(std::unique_ptr<parquet::arrow::FileWriter> &w,
@@ -270,8 +273,15 @@ static void flush(std::unique_ptr<parquet::arrow::FileWriter> &w,
     std::shared_ptr<arrow::Array> is_a, iw_a, ie_a;
     is_b.Finish(&is_a).ok(); iw_b.Finish(&iw_a).ok(); ie_b.Finish(&ie_a).ok();
 
+    arrow::UInt64Builder hops_b;
+    for (auto &r : rows) {
+        if (r.has_hops) hops_b.Append(r.hops).ok();
+        else            hops_b.AppendNull().ok();
+    }
+    std::shared_ptr<arrow::Array> hops_a; hops_b.Finish(&hops_a).ok();
+
     auto batch = arrow::RecordBatch::Make(schema, n,
-        {tag_a, op_a, idx_a, tid_a, res_a, is_a, iw_a, ie_a});
+        {tag_a, op_a, idx_a, tid_a, res_a, is_a, iw_a, ie_a, hops_a});
     w->WriteRecordBatch(*batch).ok();
 }
 
@@ -459,13 +469,16 @@ int main() {
                             uint32_t gid = (uint32_t)(base_offset + i);
                             const uint64_t s = now_ns() - t0_ns;
                             uint64_t wb_abs = 0;
+                            uint64_t hops = 0;
                             ssd->insert_in_place(
                                 batch_data.data() + i * DIM, gid,
-                                /*attrs=*/nullptr, /*out_writeback_ns_abs=*/&wb_abs);
+                                /*attrs=*/nullptr, /*out_writeback_ns_abs=*/&wb_abs,
+                                /*out_hops=*/&hops);
                             const uint64_t e = now_ns() - t0_ns;
                             const uint64_t w = wb_abs - t0_ns;
                             Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = i; r.tid = tid;
                             r.has_op_timing = true; r.op_start_ns = s; r.op_writeback_ns = w; r.op_end_ns = e;
+                            r.has_hops = true; r.hops = hops;
                             done.fetch_add(1, std::memory_order_relaxed);
                         }
                     });
@@ -523,9 +536,10 @@ int main() {
                             // cfg.beam=256 here overflows. Pipeann's own tests
                             // hardcode beam_width=8 (test_insert_only:153,
                             // bench_loop:139, utils.h:354).
+                            pipeann::QueryStats qs;
                             ssd->beam_search(q, cfg.k, /*mem_L=*/0, cfg.beam,
                                              rids.data(), rdists.data(),
-                                             /*beam_width=*/8);
+                                             /*beam_width=*/8, &qs);
                             std::vector<std::tuple<double,uint32_t,uint64_t>>
                                 rv;
                             rv.reserve(cfg.k);
@@ -537,6 +551,7 @@ int main() {
                             Row r; r.tag = stag; r.op = "search";
                             r.idx = qi; r.tid = tid;
                             r.results = std::move(rv); r.has_results = true;
+                            r.has_hops = true; r.hops = (uint64_t)qs.n_hops;
                             srows[qi] = std::move(r);
                             done.fetch_add(1, std::memory_order_relaxed);
                         }

@@ -27,7 +27,8 @@ namespace pipeann {
 
   template<typename T, typename TagT>
   int SSDIndex<T, TagT>::insert_in_place(const T *point1, const TagT &tag, const Attributes *attrs,
-                                         uint64_t *out_writeback_ns_abs) {
+                                         uint64_t *out_writeback_ns_abs,
+                                         uint64_t *out_hops) {
     QueryBuffer *read_data = this->pop_query_buf(point1);
     T *point = read_data->aligned_query<T>();  // normalized point for cosine.
     void *ctx = reader->get_ctx(); // initialize ctx here, avoid SQ polling for insert.
@@ -39,7 +40,10 @@ namespace pipeann {
 
     std::vector<Neighbor> exp_node_info;
     InsertContext insert_ctx(kExpandedNodesFactor * this->params.L, this->aligned_dim);
-    this->do_pipe_search(point1, 0, params.L, params.beam_width, exp_node_info, nullptr, &insert_ctx);
+    QueryStats insert_qs;
+    this->do_pipe_search(point1, 0, params.L, params.beam_width, exp_node_info,
+                         out_hops ? &insert_qs : nullptr, &insert_ctx);
+    if (out_hops) *out_hops = (uint64_t)insert_qs.n_hops;
     std::vector<uint32_t> new_nhood;
     pipeann::prune_neighbors(exp_node_info, new_nhood, params, metric, [this, &insert_ctx](uint32_t a, uint32_t b) {
       return this->dist_cmp->compare(insert_ctx.coord_map[a], insert_ctx.coord_map[b], this->meta_.data_dim);
