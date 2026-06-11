@@ -35,7 +35,10 @@ struct Sift100mPipeannBench;
 // ── constants ────────────────────────────────────────────────────────────────
 
 static constexpr uint32_t DIM            = 128;
-static constexpr uint64_t N              = 100'000'000ULL;
+static const uint64_t N = []() -> uint64_t {
+    if (const char *e = std::getenv("N")) return std::stoull(e);
+    return 100'000'000ULL;
+}();
 static constexpr uint64_t QLEN           = 10'000;
 static constexpr uint32_t MAX_DEGREE     = 32;
 static constexpr float    ALPHA          = 1.2f;
