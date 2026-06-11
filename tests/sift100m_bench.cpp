@@ -1,6 +1,9 @@
-// WHY insert-start/writeback/end are null: pipeann's insert_in_place is a
-// single synchronous call with no internal event hooks, so the three-phase
-// timing that fnct-hermes exposes does not exist here.
+// WHY columns on insert rows: start/end bracket the insert_in_place call;
+// insert-writeback = end (pipeann has no separable writeback phase, so the
+// column is aliased to end to keep the schema populated apple-to-apple
+// with hermes). Search rows leave all three null. The op="stage" row per
+// batch insert and per search cfg carries the absolute t0-relative
+// start/end of that stage.
 
 #include <pthread.h>
 #include <atomic>
@@ -178,10 +181,9 @@ static std::shared_ptr<arrow::Schema> make_schema() {
         arrow::field("tid",              arrow::uint32(), false),
         arrow::field("results",
             arrow::list(arrow::field("item", rtype, true)), true),
-        arrow::field("insert-start",     arrow::uint64(), true),
+        arrow::field("start",            arrow::uint64(), true),
         arrow::field("insert-writeback", arrow::uint64(), true),
-        arrow::field("insert-end",       arrow::uint64(), true),
-        arrow::field("batch-elapsed-ns", arrow::uint64(), true),
+        arrow::field("end",              arrow::uint64(), true),
     });
 }
 
@@ -192,8 +194,13 @@ struct Row {
     uint32_t    tid = 0;
     std::vector<std::tuple<double,uint32_t,uint64_t>> results;
     bool        has_results      = false;
-    bool        has_elapsed      = false;
-    uint64_t    batch_elapsed_ns = 0;
+    bool        is_stage         = false;
+    uint64_t    stage_start_ns   = 0;
+    uint64_t    stage_end_ns     = 0;
+    bool        has_op_timing    = false;
+    uint64_t    op_start_ns      = 0;
+    uint64_t    op_writeback_ns  = 0;
+    uint64_t    op_end_ns        = 0;
 };
 
 static void flush(std::unique_ptr<parquet::arrow::FileWriter> &w,
@@ -244,20 +251,33 @@ static void flush(std::unique_ptr<parquet::arrow::FileWriter> &w,
     std::shared_ptr<arrow::Array> res_a; lb->Finish(&res_a).ok();
 
     arrow::UInt64Builder is_b, iw_b, ie_b;
-    is_b.AppendNulls(n).ok(); iw_b.AppendNulls(n).ok(); ie_b.AppendNulls(n).ok();
+    for (auto &r : rows) {
+        if (r.is_stage)             is_b.Append(r.stage_start_ns).ok();
+        else if (r.has_op_timing)   is_b.Append(r.op_start_ns).ok();
+        else                        is_b.AppendNull().ok();
+    }
+    for (auto &r : rows) {
+        if (r.has_op_timing)  iw_b.Append(r.op_writeback_ns).ok();
+        else                  iw_b.AppendNull().ok();
+    }
+    for (auto &r : rows) {
+        if (r.is_stage)             ie_b.Append(r.stage_end_ns).ok();
+        else if (r.has_op_timing)   ie_b.Append(r.op_end_ns).ok();
+        else                        ie_b.AppendNull().ok();
+    }
     std::shared_ptr<arrow::Array> is_a, iw_a, ie_a;
     is_b.Finish(&is_a).ok(); iw_b.Finish(&iw_a).ok(); ie_b.Finish(&ie_a).ok();
 
-    arrow::UInt64Builder be_b;
-    for (auto &r : rows) {
-        if (r.has_elapsed) be_b.Append(r.batch_elapsed_ns).ok();
-        else               be_b.AppendNull().ok();
-    }
-    std::shared_ptr<arrow::Array> be_a; be_b.Finish(&be_a).ok();
-
     auto batch = arrow::RecordBatch::Make(schema, n,
-        {tag_a, op_a, idx_a, tid_a, res_a, is_a, iw_a, ie_a, be_a});
+        {tag_a, op_a, idx_a, tid_a, res_a, is_a, iw_a, ie_a});
     w->WriteRecordBatch(*batch).ok();
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+static uint64_t now_ns() {
+    return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -292,6 +312,8 @@ int main() {
         *schema, arrow::default_memory_pool(),
         arrow_file, pb.build()).ValueOrDie();
 
+    const uint64_t t0_ns = now_ns();
+
     // ── STEP 1: PQ training on FIRST PQ_TRAIN_SIZE points ───────────────────
     // This is the FIRST data touch — before any disk index build or insert.
     const std::string batch0_bin         = index_prefix + "_batch0.bin";
@@ -325,7 +347,7 @@ int main() {
         pq_nbr->load(index_prefix.c_str());
 
         // ── STEP 2: offline build SSDIndex on [0, BATCH) ────────────────────
-        auto build_t0 = std::chrono::steady_clock::now();
+        const uint64_t build_start_ns = now_ns() - t0_ns;
         auto *wrapper = new PretrainedPQ(pq_nbr);
         pipeann::build_disk_index<uint8_t, uint32_t>(
             batch0_bin.c_str(), index_prefix.c_str(),
@@ -335,9 +357,7 @@ int main() {
             MAX_DEGREE, L_BUILD, /*M=*/64, threads, PQ_CHUNKS,
             pipeann::Metric::L2, /*tag_file=*/nullptr,
             wrapper, /*attr_writer=*/nullptr);
-        uint64_t build_elapsed_ns =
-            (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - build_t0).count();
+        const uint64_t build_end_ns = now_ns() - t0_ns;
 
         // ── STEP 3: open SSDIndex for streaming ─────────────────────────────
         std::shared_ptr<AlignedFileReader> reader = std::make_shared<LinuxAlignedFileReader>();
@@ -377,6 +397,9 @@ int main() {
 
             if (b == 0) {
                 // batch 0 was built offline; emit insert rows without inserting
+                // WHY build_end_ns for all three: batch-0 rows have no per-insert event;
+                // report the build-completion instant for all three timing columns to keep
+                // the schema populated.
                 std::atomic<uint64_t> done(0);
                 std::mutex mu; std::condition_variable cv; bool stop = false;
                 std::thread wd(
@@ -390,7 +413,9 @@ int main() {
                         uint64_t lo = BATCH * tid / threads;
                         uint64_t hi = BATCH * (tid+1) / threads;
                         for (uint64_t i = lo; i < hi; i++) {
-                            { Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = i; r.tid = tid; }
+                            Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = i; r.tid = tid;
+                            r.has_op_timing = true;
+                            r.op_start_ns = build_end_ns; r.op_writeback_ns = build_end_ns; r.op_end_ns = build_end_ns;
                             done.fetch_add(1, std::memory_order_relaxed);
                         }
                     });
@@ -399,11 +424,11 @@ int main() {
                 { std::lock_guard<std::mutex> lk(mu); stop = true; }
                 cv.notify_one(); wd.join();
 
-                Row summ; summ.tag = ins_tag; summ.op = "batch-summary";
-                summ.idx = 0; summ.tid = 0;
-                summ.has_elapsed = true;
-                summ.batch_elapsed_ns = build_elapsed_ns;
-                batch_rows.push_back(summ);
+                Row stage_row; stage_row.tag = ins_tag; stage_row.op = "stage";
+                stage_row.idx = 0; stage_row.tid = 0;
+                stage_row.is_stage = true;
+                stage_row.stage_start_ns = build_start_ns; stage_row.stage_end_ns = build_end_ns;
+                batch_rows.push_back(stage_row);
 
             } else {
                 // stream-insert [b*BATCH, (b+1)*BATCH) via insert_in_place
@@ -415,7 +440,7 @@ int main() {
                             (std::streamsize)(BATCH * DIM));
                 }
 
-                auto ins_t0 = std::chrono::steady_clock::now();
+                const uint64_t ins_start_abs = now_ns() - t0_ns;
                 std::atomic<uint64_t> done(0);
                 std::mutex mu; std::condition_variable cv; bool stop = false;
                 std::thread wd(
@@ -430,9 +455,14 @@ int main() {
                         uint64_t hi = BATCH * (tid+1) / threads;
                         for (uint64_t i = lo; i < hi; i++) {
                             uint32_t gid = (uint32_t)(base_offset + i);
+                            const uint64_t s = now_ns() - t0_ns;
                             ssd->insert_in_place(
                                 batch_data.data() + i * DIM, gid);
-                            { Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = i; r.tid = tid; }
+                            // WHY writeback=end: pipeann has no separable writeback phase;
+                            // aliased to end to keep the schema populated apple-to-apple.
+                            const uint64_t e = now_ns() - t0_ns;
+                            Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = i; r.tid = tid;
+                            r.has_op_timing = true; r.op_start_ns = s; r.op_writeback_ns = e; r.op_end_ns = e;
                             done.fetch_add(1, std::memory_order_relaxed);
                         }
                     });
@@ -441,15 +471,12 @@ int main() {
                 { std::lock_guard<std::mutex> lk(mu); stop = true; }
                 cv.notify_one(); wd.join();
 
-                uint64_t elapsed_ns =
-                    (uint64_t)std::chrono::duration_cast<
-                        std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now() - ins_t0).count();
-                Row summ; summ.tag = ins_tag; summ.op = "batch-summary";
-                summ.idx = 0; summ.tid = 0;
-                summ.has_elapsed = true;
-                summ.batch_elapsed_ns = elapsed_ns;
-                batch_rows.push_back(summ);
+                const uint64_t ins_end_abs = now_ns() - t0_ns;
+                Row stage_row; stage_row.tag = ins_tag; stage_row.op = "stage";
+                stage_row.idx = 0; stage_row.tid = 0;
+                stage_row.is_stage = true;
+                stage_row.stage_start_ns = ins_start_abs; stage_row.stage_end_ns = ins_end_abs;
+                batch_rows.push_back(stage_row);
             }
 
             flush(pq_writer, batch_rows, schema);
@@ -468,6 +495,7 @@ int main() {
                     "_" + std::to_string(cfg.starts)
                 ))->c_str();
 
+                const uint64_t srch_start_abs = now_ns() - t0_ns;
                 std::atomic<uint64_t> done(0);
                 std::mutex mu; std::condition_variable cv; bool stop = false;
                 std::thread wd(
@@ -514,6 +542,13 @@ int main() {
                 for (auto &t : ts) t.join();
                 { std::lock_guard<std::mutex> lk(mu); stop = true; }
                 cv.notify_one(); wd.join();
+
+                const uint64_t srch_end_abs = now_ns() - t0_ns;
+                Row srch_stage; srch_stage.tag = stag; srch_stage.op = "stage";
+                srch_stage.idx = 0; srch_stage.tid = 0;
+                srch_stage.is_stage = true;
+                srch_stage.stage_start_ns = srch_start_abs; srch_stage.stage_end_ns = srch_end_abs;
+                srows.push_back(srch_stage);
 
                 flush(pq_writer, srows, schema);
             }
