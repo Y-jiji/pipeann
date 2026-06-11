@@ -26,7 +26,8 @@ namespace pipeann {
   #define UPDATE_BUF_SIZE ((2 * MAX_N_EDGES + 1) * io_size)
 
   template<typename T, typename TagT>
-  int SSDIndex<T, TagT>::insert_in_place(const T *point1, const TagT &tag, const Attributes *attrs) {
+  int SSDIndex<T, TagT>::insert_in_place(const T *point1, const TagT &tag, const Attributes *attrs,
+                                         uint64_t *out_writeback_ns_abs) {
     QueryBuffer *read_data = this->pop_query_buf(point1);
     T *point = read_data->aligned_query<T>();  // normalized point for cosine.
     void *ctx = reader->get_ctx(); // initialize ctx here, avoid SQ polling for insert.
@@ -158,6 +159,12 @@ namespace pipeann {
 
     } else {
       target_node.n_dense_nbrs = 0;
+    }
+
+    // Mirrors hermes `insert-writeback`: target node + tag committed; reverse edges not yet written.
+    if (out_writeback_ns_abs) {
+      *out_writeback_ns_abs = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
     // update the neighbors

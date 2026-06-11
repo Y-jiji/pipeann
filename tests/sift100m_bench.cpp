@@ -1,9 +1,11 @@
 // WHY columns on insert rows: start/end bracket the insert_in_place call;
-// insert-writeback = end (pipeann has no separable writeback phase, so the
-// column is aliased to end to keep the schema populated apple-to-apple
-// with hermes). Search rows leave all three null. The op="stage" row per
-// batch insert and per search cfg carries the absolute t0-relative
-// start/end of that stage.
+// insert-writeback is captured INSIDE insert_in_place at the boundary
+// between target-node commit and reverse-edge update (matches hermes's
+// `insert-writeback` event semantic — see fnct-hermes/src/index.rs:336-339).
+// Pipeann was patched to optionally fill *out_writeback_ns_abs at that
+// boundary; the bench converts to t0-relative ns. Search rows leave all
+// three null. The op="stage" row per batch insert and per search cfg
+// carries the absolute t0-relative start/end of that stage.
 
 #include <pthread.h>
 #include <atomic>
@@ -456,13 +458,14 @@ int main() {
                         for (uint64_t i = lo; i < hi; i++) {
                             uint32_t gid = (uint32_t)(base_offset + i);
                             const uint64_t s = now_ns() - t0_ns;
+                            uint64_t wb_abs = 0;
                             ssd->insert_in_place(
-                                batch_data.data() + i * DIM, gid);
-                            // WHY writeback=end: pipeann has no separable writeback phase;
-                            // aliased to end to keep the schema populated apple-to-apple.
+                                batch_data.data() + i * DIM, gid,
+                                /*attrs=*/nullptr, /*out_writeback_ns_abs=*/&wb_abs);
                             const uint64_t e = now_ns() - t0_ns;
+                            const uint64_t w = wb_abs - t0_ns;
                             Row &r = batch_rows[i]; r.tag = ins_tag; r.op = "insert"; r.idx = i; r.tid = tid;
-                            r.has_op_timing = true; r.op_start_ns = s; r.op_writeback_ns = e; r.op_end_ns = e;
+                            r.has_op_timing = true; r.op_start_ns = s; r.op_writeback_ns = w; r.op_end_ns = e;
                             done.fetch_add(1, std::memory_order_relaxed);
                         }
                     });
