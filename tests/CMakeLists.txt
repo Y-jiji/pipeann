@@ -34,5 +34,11 @@ target_link_libraries(build_disk_index_filtered ${PROJECT_NAME})
 add_executable(search_disk_index_filtered search_disk_index_filtered.cpp)
 target_link_libraries(search_disk_index_filtered ${PROJECT_NAME})
 
-add_executable(bench_loop bench_loop.cpp)
-target_link_libraries(bench_loop ${PROJECT_NAME})
+add_executable(bench_loop_sift bench_loop_sift.cpp)
+target_link_libraries(bench_loop_sift ${PROJECT_NAME})
+
+add_executable(bench_loop_deep bench_loop_deep.cpp)
+target_link_libraries(bench_loop_deep ${PROJECT_NAME})
+
+add_executable(bench_loop_spacev bench_loop_spacev.cpp)
+target_link_libraries(bench_loop_spacev ${PROJECT_NAME})

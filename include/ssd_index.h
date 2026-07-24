@@ -193,7 +193,7 @@ namespace pipeann {
                                 Selector *selector, const Attributes &query_attrs, TagT *res_tags, float *res_dists,
                                 const uint64_t beam_width, QueryStats *stats = nullptr);
 
-    int insert_in_place(const T *point, const TagT &tag, const Attributes *attrs = nullptr);
+    int insert_in_place(const T *point, const TagT &tag, const Attributes *attrs = nullptr, QueryStats *stats = nullptr);
 
     // Merge deletes (NOTE: index read-only during merge.)
     // Returns id_map: old_id -> new_id.

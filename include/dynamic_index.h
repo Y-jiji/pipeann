@@ -353,10 +353,14 @@ class DynamicIndex : public BaseDynamicIndex {
     }
   }
 
-  // Single-point insert (for C++ benchmarks / streaming updates).
-  int insert(const T *point, const TagT &tag, const pipeann::Attributes *attrs = nullptr) {
+  // Single-point insert (for C++ benchmarks / streaming updates). `stats`,
+  // if given, is populated with the disk-path search stats (n_ios, n_cmps,
+  // total_us, ...) of the insert's internal do_pipe_search call -- null
+  // (mem-index-only) inserts leave it untouched.
+  int insert(const T *point, const TagT &tag, const pipeann::Attributes *attrs = nullptr,
+             pipeann::QueryStats *stats = nullptr) {
     auto mu = std::shared_lock<std::shared_mutex>(save_mu_);
-    do_insert(point, tag, attrs);
+    do_insert(point, tag, attrs, stats);
     return 0;
   }
 
@@ -443,9 +447,10 @@ class DynamicIndex : public BaseDynamicIndex {
   }
 
  private:
-  void do_insert(const T *point_p, TagT tag, const pipeann::Attributes *attrs = nullptr) {
+  void do_insert(const T *point_p, TagT tag, const pipeann::Attributes *attrs = nullptr,
+                 pipeann::QueryStats *stats = nullptr) {
     if (use_disk_index_) {
-      int target_id = disk_index_->insert_in_place(point_p, tag, attrs);
+      int target_id = disk_index_->insert_in_place(point_p, tag, attrs, stats);
 
       // Insert attributes into attr_indexes (if loaded).
       if (attrs != nullptr) {
