@@ -15,10 +15,12 @@
 // search step: a single shuffled index range over [insert-batch | fixed
 // query set] is dispatched across one OpenMP thread pool, exactly mirroring
 // fnct-bench's Bench::runmix (see fnct-bench/src/lib.rs). Rows from this
-// step alone are undersampled (keep 1-in-MIXRATE); everything else (phase 1,
-// and the extra_search_cfgs() sweep run after each mix step) is logged in
-// full. Recall is computed post-hoc against a ground-truth log, so every
-// logged row still carries the returned ids/dists needed for that join.
+// step alone are undersampled (keep 1-in-MIXRATE). It is followed by ONE
+// fully-logged (rate=1) search-only call using the same PRIMARY_CFG -- the
+// recall-verification call, since the mix step's own search rows are too
+// sparse (undersampled) to compute recall@10 from reliably. Recall is
+// computed post-hoc against a ground-truth log, so every logged row still
+// carries the returned ids/dists needed for that join.
 //
 // Data/queries are raw flat files (no header), dtype float32, dim 96.
 
@@ -62,7 +64,7 @@ constexpr int SEARCH_THREADS = 16;
 constexpr int MIX_THREADS = 32;
 
 // Keep 1-in-MIXRATE rows from the concurrent mix step only; phase 1 and the
-// extra-configs sweep are always logged in full.
+// recall-verification search call are always logged in full.
 constexpr uint64_t MIXRATE = 50;
 
 struct SearchCfg {
@@ -70,12 +72,10 @@ struct SearchCfg {
   uint32_t L;
 };
 
-// The one config that runs concurrently with insert via the mix step.
+// The one config used both by the mix step and the recall-verification
+// search call that follows it -- same config, so throughput/latency and
+// recall@10 are measured on identical search behaviour.
 constexpr SearchCfg PRIMARY_CFG{10, 120};
-
-std::vector<SearchCfg> extra_search_cfgs() {
-  return {{10, 20}, {10, 40}, {10, 60}, {10, 300}};
-}
 
 void load_raw_batch(const std::string &path, size_t off, size_t count, size_t dim, std::vector<T> &out) {
   out.assign(count * dim, T{});
@@ -249,7 +249,6 @@ void run(const std::string &data, const std::string &queries_path, const std::st
   index.set_index_prefix(index_prefix);
 
   uint32_t max_k = PRIMARY_CFG.k;
-  for (const auto &sc : extra_search_cfgs()) max_k = std::max(max_k, sc.k);
 
   std::ofstream of(out_path);
   if (!of) { LOG(ERROR) << "open " << out_path; std::exit(1); }
@@ -273,9 +272,7 @@ void run(const std::string &data, const std::string &queries_path, const std::st
     load_raw_batch(data, off, bsz, DIM, batch_buf);
     LOG(INFO) << "[phase2 batch " << bidx << "] mix insert+search " << bsz << " at offset " << off;
     run_mix_step(of, index, batch_buf, queries, off, bsz, bidx, run_start, max_k);
-    for (const auto &sc : extra_search_cfgs()) {
-      run_search_sweep(of, index, queries, sc, max_k, bidx, run_start, "_run0");
-    }
+    run_search_sweep(of, index, queries, PRIMARY_CFG, max_k, bidx, run_start, "_verify");
     off += bsz;
     bidx++;
   }
