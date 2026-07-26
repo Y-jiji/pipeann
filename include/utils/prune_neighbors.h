@@ -114,8 +114,11 @@ namespace pipeann {
   // metric: distance metric.
   // compute_distances: callable to compute distances from center_id to multiple IDs.
   //   void(uint32_t center_id, const uint32_t *ids, uint32_t n, float *dists_out)
+  // Returns true if an existing neighbor was evicted to make room for target_id
+  // (the back-edge was kept), false if target_id itself lost the tie-break
+  // (the back-edge was rejected and nhood is unchanged in membership).
   template<typename DistBatchFunc>
-  inline void delta_prune_neighbors(std::vector<uint32_t> &nhood, uint32_t center_id, uint32_t target_id,
+  inline bool delta_prune_neighbors(std::vector<uint32_t> &nhood, uint32_t center_id, uint32_t target_id,
                                     const IndexBuildParameters &params, Metric metric,
                                     DistBatchFunc &&compute_distances) {
     struct TriangleNeighbor {
@@ -190,8 +193,9 @@ namespace pipeann {
     };
 
     if (to_evict != kInvalidID) {
+      bool evicted_existing = (to_evict != tgt_idx);
       finish();
-      return;
+      return evicted_existing;
     }
 
     // Fast path failed. The target is high quality.
@@ -211,15 +215,18 @@ namespace pipeann {
       for (uint32_t t = start + 1; t < pool.size(); t++) {
         if (get_occlude_factor(metric, pool[t].distance, center_dists[t]) > alpha) {
           to_evict = t;
+          bool evicted_existing = (to_evict != tgt_idx);
           finish();
-          return;
+          return evicted_existing;
         }
       }
     }
 
     // All points satisfy alpha-RNG, evict the farthest.
     to_evict = pool.size() - 1;
+    bool evicted_existing = (to_evict != tgt_idx);
     finish();
+    return evicted_existing;
   }
 
   // ============================================================================

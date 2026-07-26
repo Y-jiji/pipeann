@@ -69,6 +69,10 @@ namespace pipeann {
     for (auto &loc : locs) {
       pages_to_rmw_set.insert(loc_sector_no(loc));
     }
+    if (stats != nullptr) {
+      stats->n_out_edges = new_nhood.size();
+      stats->n_pages_touched = pages_to_rmw_set.size();
+    }
     std::vector<IORequest> pages_to_rmw;
     // ordered because of std::set
     for (auto &page_no : pages_to_rmw_set) {
@@ -178,11 +182,17 @@ namespace pipeann {
       if (nhood.size() > this->params.R) {  // delta prune neighbors
         auto &thread_pq_buf = read_data->nbr_vec_scratch;
         auto nbr = this->nbr_handler;
-        pipeann::delta_prune_neighbors(
+        bool evicted_existing = pipeann::delta_prune_neighbors(
             nhood, new_nhood[i], target_id, params, metric,
             [nbr, &thread_pq_buf](uint32_t center, const uint32_t *ids, uint32_t n, float *dists_out) {
               nbr->compute_dists(center, ids, n, dists_out, thread_pq_buf);
             });
+        if (stats != nullptr && evicted_existing) {
+          stats->n_in_edges += 1;
+          stats->n_evictions += 1;
+        }
+      } else if (stats != nullptr) {
+        stats->n_in_edges += 1;
       }
 
       auto w_sector = loc_sector_no(locs[i]);

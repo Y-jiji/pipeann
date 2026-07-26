@@ -87,19 +87,24 @@ void load_raw_batch(const std::string &path, size_t off, size_t count, size_t di
 }
 
 // Column order matches fnct-bench's QueryRow, plus a leading `op` column
-// distinguishing insert rows (blank id@/dist@) from search rows.
+// distinguishing insert rows (blank id@/dist@) from search rows. `pages`,
+// `out-edges`, `in-edges`, `evictions` are insert-only graph-mutation
+// counters (0 on search rows) -- `pages` is the distinct-disk-page
+// footprint of the insert's read-modify-write, the key page-touch metric.
 void write_header(std::ofstream &of, uint32_t max_k) {
   of << "batch,op,visitor,qi,start_ns,lat_ns";
   for (uint32_t i = 1; i <= max_k; i++) of << ",id@" << i << ",dist@" << i;
-  of << ",n_ios,n_hops,n_cmps,total_us\n";
+  of << ",loads,pages,hops,visits,total_us,out-edges,in-edges,evictions\n";
 }
 
 void write_insert_row(std::ofstream &of, size_t bidx, const std::string &visitor, size_t qi, uint64_t start_ns,
                       uint64_t lat_ns, const pipeann::QueryStats &s, uint32_t max_k) {
   of << bidx << ",insert," << visitor << ',' << qi << ',' << start_ns << ',' << lat_ns;
   for (uint32_t j = 0; j < max_k; j++) of << ",,";
-  of << ',' << static_cast<uint64_t>(s.n_ios) << ',' << static_cast<uint64_t>(s.n_hops) << ','
-     << static_cast<uint64_t>(s.n_cmps) << ',' << static_cast<uint64_t>(s.total_us) << '\n';
+  of << ',' << static_cast<uint64_t>(s.n_ios) << ',' << static_cast<uint64_t>(s.n_pages_touched) << ','
+     << static_cast<uint64_t>(s.n_hops) << ',' << static_cast<uint64_t>(s.n_cmps) << ','
+     << static_cast<uint64_t>(s.total_us) << ',' << static_cast<uint64_t>(s.n_out_edges) << ','
+     << static_cast<uint64_t>(s.n_in_edges) << ',' << static_cast<uint64_t>(s.n_evictions) << '\n';
 }
 
 void write_search_row(std::ofstream &of, size_t bidx, const std::string &visitor, size_t qi, uint64_t start_ns,
@@ -110,8 +115,10 @@ void write_search_row(std::ofstream &of, size_t bidx, const std::string &visitor
     if (j < k && ids[j] != std::numeric_limits<TagT>::max()) of << ',' << ids[j] << ',' << dists[j];
     else of << ",,";
   }
-  of << ',' << static_cast<uint64_t>(s.n_ios) << ',' << static_cast<uint64_t>(s.n_hops) << ','
-     << static_cast<uint64_t>(s.n_cmps) << ',' << static_cast<uint64_t>(s.total_us) << '\n';
+  of << ',' << static_cast<uint64_t>(s.n_ios) << ',' << static_cast<uint64_t>(s.n_pages_touched) << ','
+     << static_cast<uint64_t>(s.n_hops) << ',' << static_cast<uint64_t>(s.n_cmps) << ','
+     << static_cast<uint64_t>(s.total_us) << ',' << static_cast<uint64_t>(s.n_out_edges) << ','
+     << static_cast<uint64_t>(s.n_in_edges) << ',' << static_cast<uint64_t>(s.n_evictions) << '\n';
 }
 
 // Fully-logged search-only sweep over the fixed query set at the corpus
