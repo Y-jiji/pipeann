@@ -167,18 +167,13 @@ endif()
 
 add_subdirectory(src)
 
-# Under the fnct-db umbrella build (evaluation/CMakeLists.txt) DGAI is
-# configured in the same tree and shares eleven target names with tests/ and
-# tests/utils/. Skip them there and build only the bench binaries, whose
-# sources sit in the evaluation directory so all three systems' bench code can
-# be read side by side.
-if(FNCTEVAL)
-	foreach(dataset sift deep spacev)
-		add_executable(pipeann_${dataset} ${EVALDIR}/bench_pipeann_${dataset}.cpp)
-		target_include_directories(pipeann_${dataset} PRIVATE ${EVALDIR})
-		target_link_libraries(pipeann_${dataset} ${PROJECT_NAME})
-	endforeach()
-else()
-	add_subdirectory(tests)
-	add_subdirectory(tests/utils)
-endif()
+# tests/ and tests/utils/ are dropped: they share eleven target names with
+# DGAI, which the fnct-db umbrella build configures in the same tree. The
+# bench sources live in ${EVALDIR} next to DGAI's and SPFresh's, so all three
+# systems' bench code can be read side by side, but they must be compiled
+# here to inherit this directory's definitions.
+foreach(dataset sift deep spacev)
+	add_executable(pipeann_${dataset} ${EVALDIR}/bench_pipeann_${dataset}.cpp)
+	target_include_directories(pipeann_${dataset} PRIVATE ${EVALDIR})
+	target_link_libraries(pipeann_${dataset} ${PROJECT_NAME})
+endforeach()
