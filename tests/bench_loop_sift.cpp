@@ -51,8 +51,8 @@ using TagT = uint32_t;
 using clk = std::chrono::steady_clock;
 
 constexpr size_t DIM = 128;
-constexpr size_t N = 200'000'000;
-constexpr size_t BASE = 100'000'000;
+constexpr size_t N = 10'000'000;
+constexpr size_t BASE = 5'000'000;
 constexpr size_t BATCH = 1'000'000;
 constexpr size_t QLEN = 10'000;
 
