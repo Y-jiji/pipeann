@@ -166,5 +166,19 @@ if(BLAS_FOUND)
 endif()
 
 add_subdirectory(src)
-add_subdirectory(tests)
-add_subdirectory(tests/utils)
+
+# Under the fnct-db umbrella build (evaluation/CMakeLists.txt) DGAI is
+# configured in the same tree and shares eleven target names with tests/ and
+# tests/utils/. Skip them there and build only the bench binaries, whose
+# sources sit in the evaluation directory so all three systems' bench code can
+# be read side by side.
+if(FNCTEVAL)
+	foreach(dataset sift deep spacev)
+		add_executable(pipeann_${dataset} ${EVALDIR}/bench_pipeann_${dataset}.cpp)
+		target_include_directories(pipeann_${dataset} PRIVATE ${EVALDIR})
+		target_link_libraries(pipeann_${dataset} ${PROJECT_NAME})
+	endforeach()
+else()
+	add_subdirectory(tests)
+	add_subdirectory(tests/utils)
+endif()
