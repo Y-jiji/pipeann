@@ -17,6 +17,7 @@ namespace pipeann {
     double cpu_us1 = 0;         // total time spent in CPU
     double cpu_us2 = 0;         // total time spent in CPU
     double n_cmps = 0;          // # cmps
+    double n_exact = 0;         // # full-precision distances computed over fetched coords
     double n_hops = 0;          // # search hops
     double n_current_used = 0;  // # force return for latency limit
     double n_pages_touched = 0; // # distinct disk pages touched by this insert's graph-mutation read-modify-write

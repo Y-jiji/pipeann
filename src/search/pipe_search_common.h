@@ -61,6 +61,9 @@ namespace pipeann {
       T *node_fp_coords_copy = data_buf;
       memcpy(node_fp_coords_copy, node.coords, meta_.data_dim * sizeof(T));
       float cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy, (unsigned) aligned_dim);
+      if (stats != nullptr) {
+        stats->n_exact++;
+      }
 
       if (!is_member(id, node)) {
         return false;
