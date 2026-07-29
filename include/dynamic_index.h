@@ -358,10 +358,16 @@ class DynamicIndex : public BaseDynamicIndex {
   // total_us, ...) of the insert's internal do_pipe_search call -- null
   // (mem-index-only) inserts leave it untouched.
   int insert(const T *point, const TagT &tag, const pipeann::Attributes *attrs = nullptr,
-             pipeann::QueryStats *stats = nullptr) {
+             pipeann::QueryStats *stats = nullptr, std::uint64_t *pages = nullptr) {
     auto mu = std::shared_lock<std::shared_mutex>(save_mu_);
-    do_insert(point, tag, attrs, stats);
+    do_insert(point, tag, attrs, stats, pages);
     return 0;
+  }
+
+  // Blocks until queued background writes complete, so a caller can read the
+  // page counts those writes patch. See SSDIndex::drain.
+  void drain() {
+    if (use_disk_index_) disk_index_->drain();
   }
 
   // Single-point lazy delete (marks tag for future merge).
@@ -448,9 +454,9 @@ class DynamicIndex : public BaseDynamicIndex {
 
  private:
   void do_insert(const T *point_p, TagT tag, const pipeann::Attributes *attrs = nullptr,
-                 pipeann::QueryStats *stats = nullptr) {
+                 pipeann::QueryStats *stats = nullptr, std::uint64_t *pages = nullptr) {
     if (use_disk_index_) {
-      int target_id = disk_index_->insert_in_place(point_p, tag, attrs, stats);
+      int target_id = disk_index_->insert_in_place(point_p, tag, attrs, stats, pages);
 
       // Insert attributes into attr_indexes (if loaded).
       if (attrs != nullptr) {

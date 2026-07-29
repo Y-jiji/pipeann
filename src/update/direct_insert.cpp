@@ -26,7 +26,8 @@ namespace pipeann {
   #define UPDATE_BUF_SIZE ((2 * MAX_N_EDGES + 1) * io_size)
 
   template<typename T, typename TagT>
-  int SSDIndex<T, TagT>::insert_in_place(const T *point1, const TagT &tag, const Attributes *attrs, QueryStats *stats) {
+  int SSDIndex<T, TagT>::insert_in_place(const T *point1, const TagT &tag, const Attributes *attrs, QueryStats *stats,
+                                         uint64_t *pages) {
     QueryBuffer *read_data = this->pop_query_buf(point1);
     T *point = read_data->aligned_query<T>();  // normalized point for cosine.
     void *ctx = reader->get_ctx(); // initialize ctx here, avoid SQ polling for insert.
@@ -232,7 +233,9 @@ namespace pipeann {
                                 .writes = std::move(writes),
                                 .pages_to_unlock = std::move(pages_locked),
                                 .pages_to_deref = std::move(write_page_ref),
+                                .pages = pages,
                                 .terminate = false};
+      bg_pending.fetch_add(1, std::memory_order_acq_rel);
       bg_tasks.push(bg_task);
       bg_tasks.push_notify_all();
     } else {
@@ -240,6 +243,11 @@ namespace pipeann {
     }
     reader->deref(&insert_ctx.page_ref);
 #else
+    if (pages != nullptr) {
+      uint64_t written = 0;
+      for (auto &req : writes) written += req.len / SECTOR_LEN;
+      *pages = written;
+    }
     reader->write(writes, ctx);
     reader->free_io_buf(read_data->update_buf, UPDATE_BUF_SIZE);
     read_data->update_buf = nullptr;
@@ -271,6 +279,11 @@ namespace pipeann {
         break;
       }
 
+      if (task->pages != nullptr) {
+        uint64_t written = 0;
+        for (auto &req : task->writes) written += req.len / SECTOR_LEN;
+        *task->pages = written;
+      }
       reader->write(task->writes, ctx);
       reader->free_io_buf(task->thread_data->update_buf, UPDATE_BUF_SIZE);
       task->thread_data->update_buf = nullptr;
@@ -279,6 +292,7 @@ namespace pipeann {
       reader->deref(&task->pages_to_deref);
       this->push_query_buf(task->thread_data);
       delete task;
+      bg_pending.fetch_sub(1, std::memory_order_acq_rel);
       ++n_tasks;
 
       if (timer.elapsed() >= 5000000) {
@@ -287,6 +301,13 @@ namespace pipeann {
         timer.reset();
         n_tasks = 0;
       }
+    }
+  }
+
+  template<class T, class TagT>
+  void SSDIndex<T, TagT>::drain() {
+    while (bg_pending.load(std::memory_order_acquire) != 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
 
