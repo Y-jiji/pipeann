@@ -27,7 +27,7 @@ namespace pipeann {
 
   template<typename T, typename TagT>
   int SSDIndex<T, TagT>::insert_in_place(const T *point1, const TagT &tag, const Attributes *attrs, QueryStats *stats,
-                                         uint64_t *pages) {
+                                         uint64_t *pages, uint64_t *close, uint64_t begun) {
     QueryBuffer *read_data = this->pop_query_buf(point1);
     T *point = read_data->aligned_query<T>();  // normalized point for cosine.
     void *ctx = reader->get_ctx(); // initialize ctx here, avoid SQ polling for insert.
@@ -234,6 +234,8 @@ namespace pipeann {
                                 .pages_to_unlock = std::move(pages_locked),
                                 .pages_to_deref = std::move(write_page_ref),
                                 .pages = pages,
+                                .close = close,
+                                .begun = begun,
                                 .terminate = false};
       bg_pending.fetch_add(1, std::memory_order_acq_rel);
       bg_tasks.push(bg_task);
@@ -243,6 +245,9 @@ namespace pipeann {
     }
     reader->deref(&insert_ctx.page_ref);
 #else
+    if (close != nullptr) {
+      *close = (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count() - begun;
+    }
     if (pages != nullptr) {
       uint64_t written = 0;
       for (auto &req : writes) written += req.len / SECTOR_LEN;
@@ -285,6 +290,10 @@ namespace pipeann {
         *task->pages = written;
       }
       reader->write(task->writes, ctx);
+      if (task->close != nullptr) {
+        uint64_t done = (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count();
+        *task->close = done - task->begun;
+      }
       reader->free_io_buf(task->thread_data->update_buf, UPDATE_BUF_SIZE);
       task->thread_data->update_buf = nullptr;
 

@@ -358,9 +358,10 @@ class DynamicIndex : public BaseDynamicIndex {
   // total_us, ...) of the insert's internal do_pipe_search call -- null
   // (mem-index-only) inserts leave it untouched.
   int insert(const T *point, const TagT &tag, const pipeann::Attributes *attrs = nullptr,
-             pipeann::QueryStats *stats = nullptr, std::uint64_t *pages = nullptr) {
+             pipeann::QueryStats *stats = nullptr, std::uint64_t *pages = nullptr,
+             std::uint64_t *close = nullptr, std::uint64_t begun = 0) {
     auto mu = std::shared_lock<std::shared_mutex>(save_mu_);
-    do_insert(point, tag, attrs, stats, pages);
+    do_insert(point, tag, attrs, stats, pages, close, begun);
     return 0;
   }
 
@@ -454,9 +455,10 @@ class DynamicIndex : public BaseDynamicIndex {
 
  private:
   void do_insert(const T *point_p, TagT tag, const pipeann::Attributes *attrs = nullptr,
-                 pipeann::QueryStats *stats = nullptr, std::uint64_t *pages = nullptr) {
+                 pipeann::QueryStats *stats = nullptr, std::uint64_t *pages = nullptr,
+                 std::uint64_t *close = nullptr, std::uint64_t begun = 0) {
     if (use_disk_index_) {
-      int target_id = disk_index_->insert_in_place(point_p, tag, attrs, stats, pages);
+      int target_id = disk_index_->insert_in_place(point_p, tag, attrs, stats, pages, close, begun);
 
       // Insert attributes into attr_indexes (if loaded).
       if (attrs != nullptr) {

@@ -194,7 +194,7 @@ namespace pipeann {
                                 const uint64_t beam_width, QueryStats *stats = nullptr);
 
     int insert_in_place(const T *point, const TagT &tag, const Attributes *attrs = nullptr, QueryStats *stats = nullptr,
-                        uint64_t *pages = nullptr);
+                        uint64_t *pages = nullptr, uint64_t *close = nullptr, uint64_t begun = 0);
 
     // Blocks until every queued background write has completed, so a caller
     // can read the counters those writes patch.
@@ -228,10 +228,14 @@ namespace pipeann {
       std::vector<IORequest> writes;
       std::vector<uint64_t> pages_to_unlock;
       std::vector<uint64_t> pages_to_deref;
-      // Counter the caller wants the pages this task writes; null when the
-      // caller is not logging this insert. Points into storage the caller
-      // keeps alive until it drains, never into the task itself.
+      // Counters the caller wants this task to fill: the pages it writes and
+      // the raw steady_clock nanosecond at which it finished, which closes
+      // the insert that queued it. Null when the caller is not logging that
+      // insert. They point into storage the caller keeps alive until it
+      // drains, never into the task itself.
       uint64_t *pages = nullptr;
+      uint64_t *close = nullptr;
+      uint64_t begun = 0;
       bool terminate = false;
     };
 
