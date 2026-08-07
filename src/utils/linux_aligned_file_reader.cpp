@@ -630,6 +630,9 @@ void LinuxAlignedFileReader::register_thread(int flag) {
 }
 
 void LinuxAlignedFileReader::deregister_thread() {
+  if (ioctx::ring == nullptr) {
+    return;
+  }
   io_uring_queue_exit(ioctx::ring);
   delete ioctx::ring;
   ioctx::ring = nullptr;

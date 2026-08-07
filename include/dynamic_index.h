@@ -80,6 +80,11 @@ class DynamicIndex : public BaseDynamicIndex {
   ~DynamicIndex() {
   }
 
+  // Releases the calling thread's io_uring context. An ephemeral worker
+  // pool must call this at each worker's exit, or the thread_local ring's
+  // fds leak (raw-pointer TLS runs no destructor on thread exit).
+  void deregister_thread() { reader_->deregister_thread(); }
+
   // Load an index from disk.
   // If copy_to_shadow is true, the disk index is first copied to a shadow prefix
   // to avoid polluting the original index during in-place inserts.
