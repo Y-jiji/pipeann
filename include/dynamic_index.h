@@ -136,8 +136,10 @@ class DynamicIndex : public BaseDynamicIndex {
 
     // re-build. Forward R/L from params_ so the initial disk build matches
     // the parameters the caller wanted for inserts (used by the insert-only
-    // benchmark; default 0 preserves the auto-configured path).
-    this->build(data_path, cur_index_prefix_, tags_path.c_str(), false, params_.R, params_.L);
+    // benchmark; default 0 preserves the auto-configured path). Build the
+    // in-memory entry-point index too, so the following load() finds
+    // _mem.index and sets mem_L, matching a prebuilt index's search path.
+    this->build(data_path, cur_index_prefix_, tags_path.c_str(), true, params_.R, params_.L);
     this->load(cur_index_prefix_, true);  // here sets use_disk_index_ to true.
     LOG(INFO) << "Transform memory index to disk index done.";
   }
