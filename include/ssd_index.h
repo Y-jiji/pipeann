@@ -196,9 +196,8 @@ namespace pipeann {
     int insert_in_place(const T *point, const TagT &tag, const Attributes *attrs = nullptr, QueryStats *stats = nullptr,
                         uint64_t *pages = nullptr, uint64_t *close = nullptr, uint64_t begun = 0);
 
-    // Blocks until every queued background write has completed, so a caller
-    // can read the counters those writes patch.
-    void drain();
+    void start_bg_io();
+    void stop_bg_io();
 
     // Merge deletes (NOTE: index read-only during merge.)
     // Returns id_map: old_id -> new_id.
@@ -232,7 +231,7 @@ namespace pipeann {
       // the raw steady_clock nanosecond at which it finished, which closes
       // the insert that queued it. Null when the caller is not logging that
       // insert. They point into storage the caller keeps alive until it
-      // drains, never into the task itself.
+      // stop_bg_io joins, never into the task itself.
       uint64_t *pages = nullptr;
       uint64_t *close = nullptr;
       uint64_t begun = 0;
@@ -268,7 +267,6 @@ namespace pipeann {
 
     // Background I/O threads for insert.
     ConcurrentQueue<BgTask *> bg_tasks = ConcurrentQueue<BgTask *>(nullptr);
-    std::atomic<uint64_t> bg_pending{0};
     std::thread *bg_io_thread_[kBgIOThreads]{nullptr};
 
     // Locking tables for concurrency control.

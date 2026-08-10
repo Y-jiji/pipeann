@@ -117,30 +117,11 @@ namespace pipeann {
       this->thread_data_queue.push(data);
       this->reader->register_buf(data->sector_scratch, MAX_N_SECTOR_READS * SECTOR_LEN, 0);
     }
-
-#ifndef READ_ONLY_TESTS
-    // background thread.
-    LOG(INFO) << "Setup " << kBgIOThreads << " background I/O threads for insert...";
-    for (int i = 0; i < kBgIOThreads; ++i) {
-      bg_io_thread_[i] = new std::thread(&SSDIndex<T, TagT>::bg_io_thread, this);
-      bg_io_thread_[i]->detach();
-    }
-#endif
   }
 
   template<typename T, typename TagT>
   void SSDIndex<T, TagT>::destroy_buffers() {
-#ifndef READ_ONLY_TESTS
-    for (int i = 0; i < kBgIOThreads; ++i) {
-      if (bg_io_thread_[i] != nullptr) {
-        auto bg_task = new BgTask{
-            .thread_data = nullptr, .writes = {}, .pages_to_unlock = {}, .pages_to_deref = {}, .terminate = true};
-        bg_tasks.push(bg_task);
-        bg_tasks.push_notify_all();
-        bg_io_thread_[i] = nullptr;
-      }
-    }
-#endif
+    stop_bg_io();
 
     while (!this->thread_data_bufs.empty()) {
       auto buf = this->thread_data_bufs.back();
@@ -153,6 +134,30 @@ namespace pipeann {
       this->thread_data_bufs.pop_back();
       this->thread_data_queue.pop();
       delete buf;
+    }
+  }
+
+  template<typename T, typename TagT>
+  void SSDIndex<T, TagT>::start_bg_io() {
+    for (int i = 0; i < kBgIOThreads; ++i) {
+      if (bg_io_thread_[i] == nullptr) {
+        bg_io_thread_[i] = new std::thread(&SSDIndex<T, TagT>::bg_io_thread, this);
+      }
+    }
+  }
+
+  template<typename T, typename TagT>
+  void SSDIndex<T, TagT>::stop_bg_io() {
+    for (int i = 0; i < kBgIOThreads; ++i) {
+      if (bg_io_thread_[i] != nullptr) {
+        auto bg_task = new BgTask{
+            .thread_data = nullptr, .writes = {}, .pages_to_unlock = {}, .pages_to_deref = {}, .terminate = true};
+        bg_tasks.push(bg_task);
+        bg_tasks.push_notify_all();
+        bg_io_thread_[i]->join();
+        delete bg_io_thread_[i];
+        bg_io_thread_[i] = nullptr;
+      }
     }
   }
 

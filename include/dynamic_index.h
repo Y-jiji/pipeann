@@ -372,10 +372,12 @@ class DynamicIndex : public BaseDynamicIndex {
     return 0;
   }
 
-  // Blocks until queued background writes complete, so a caller can read the
-  // page counts those writes patch. See SSDIndex::drain.
-  void drain() {
-    if (use_disk_index_) disk_index_->drain();
+  void start_bg_io() {
+    if (use_disk_index_) disk_index_->start_bg_io();
+  }
+
+  void stop_bg_io() {
+    if (use_disk_index_) disk_index_->stop_bg_io();
   }
 
   // Single-point lazy delete (marks tag for future merge).

@@ -237,7 +237,6 @@ namespace pipeann {
                                 .close = close,
                                 .begun = begun,
                                 .terminate = false};
-      bg_pending.fetch_add(1, std::memory_order_acq_rel);
       bg_tasks.push(bg_task);
       bg_tasks.push_notify_all();
     } else {
@@ -301,7 +300,6 @@ namespace pipeann {
       reader->deref(&task->pages_to_deref);
       this->push_query_buf(task->thread_data);
       delete task;
-      bg_pending.fetch_sub(1, std::memory_order_acq_rel);
       ++n_tasks;
 
       if (timer.elapsed() >= 5000000) {
@@ -310,13 +308,6 @@ namespace pipeann {
         timer.reset();
         n_tasks = 0;
       }
-    }
-  }
-
-  template<class T, class TagT>
-  void SSDIndex<T, TagT>::drain() {
-    while (bg_pending.load(std::memory_order_acquire) != 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
 
