@@ -177,3 +177,7 @@ foreach(dataset sift deep spacev)
 	target_include_directories(pipeann_${dataset} PRIVATE ${EVALDIR})
 	target_link_libraries(pipeann_${dataset} ${PROJECT_NAME})
 endforeach()
+
+add_executable(pipeann_sift_10m10m_smoke ${EVALDIR}/bench_pipeann_sift_10m10m_smoke.cpp)
+target_include_directories(pipeann_sift_10m10m_smoke PRIVATE ${EVALDIR})
+target_link_libraries(pipeann_sift_10m10m_smoke ${PROJECT_NAME})
