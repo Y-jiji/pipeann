@@ -216,22 +216,36 @@ namespace pipeann {
     void populate_chunk_distances_l2(const T *query_vec, float *dist_vec) {
 #ifdef USE_AVX512
       memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
-      // chunk wise distance computation
       for (uint64_t chunk = 0; chunk < n_chunks; chunk++) {
-        // sum (q-c)^2 for the dimensions associated with this chunk
         float *chunk_dists = dist_vec + (256 * chunk);
         for (uint64_t j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
-          // No longer using rearrangement - dimensions are processed in natural order
           float *centers_dim_vec = tables_T + (256 * j);
           for (uint64_t idx = 0; idx < 256; idx += 16) {
-            __m512i center_i = _mm512_stream_load_si512(centers_dim_vec + idx);  // avoid cache thrashing
+            __m512i center_i = _mm512_stream_load_si512(centers_dim_vec + idx);
             __m512 center_f = _mm512_castsi512_ps(center_i);
             __m512 query_f = _mm512_set1_ps(query_vec[j] - centroid[j]);
             __m512 diff = _mm512_sub_ps(center_f, query_f);
             __m512 diff_sq = _mm512_mul_ps(diff, diff);
             __m512 chunk_dists_v = _mm512_load_ps(chunk_dists + idx);
             chunk_dists_v = _mm512_add_ps(chunk_dists_v, diff_sq);
-            _mm512_store_ps(chunk_dists + idx, chunk_dists_v);  // dist_vec should be in cache.
+            _mm512_store_ps(chunk_dists + idx, chunk_dists_v);
+          }
+        }
+      }
+#elif defined(USE_AVX2)
+      memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
+      for (uint64_t chunk = 0; chunk < n_chunks; chunk++) {
+        float *chunk_dists = dist_vec + (256 * chunk);
+        for (uint64_t j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+          float *centers_dim_vec = tables_T + (256 * j);
+          __m256 query_f = _mm256_set1_ps(query_vec[j] - centroid[j]);
+          for (uint64_t idx = 0; idx < 256; idx += 8) {
+            __m256 center_f = _mm256_loadu_ps(centers_dim_vec + idx);
+            __m256 diff = _mm256_sub_ps(center_f, query_f);
+            __m256 diff_sq = _mm256_mul_ps(diff, diff);
+            __m256 chunk_dists_v = _mm256_load_ps(chunk_dists + idx);
+            chunk_dists_v = _mm256_add_ps(chunk_dists_v, diff_sq);
+            _mm256_store_ps(chunk_dists + idx, chunk_dists_v);
           }
         }
       }
@@ -269,11 +283,29 @@ namespace pipeann {
           __m512 q_vec = _mm512_set1_ps((float) query_vec[j]);
 
           for (uint64_t idx = 0; idx < 256; idx += 16) {
-            __m512i center_vals_i = _mm512_stream_load_si512(centers_dim_vec + idx);  // avoid cache thrashing
+            __m512i center_vals_i = _mm512_stream_load_si512(centers_dim_vec + idx);
             __m512 center_vals = _mm512_castsi512_ps(center_vals_i);
             __m512 acc = _mm512_load_ps(chunk_dists + idx);
             acc = _mm512_fnmadd_ps(q_vec, center_vals, acc);
             _mm512_store_ps(chunk_dists + idx, acc);
+          }
+        }
+      }
+#elif defined(USE_AVX2)
+      std::memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
+
+      for (uint64_t chunk = 0; chunk < n_chunks; chunk++) {
+        float *chunk_dists = dist_vec + (256 * chunk);
+
+        for (uint64_t j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+          float *centers_dim_vec = tables_T + (256 * j);
+          __m256 q_vec = _mm256_set1_ps((float) query_vec[j]);
+
+          for (uint64_t idx = 0; idx < 256; idx += 8) {
+            __m256 center_vals = _mm256_loadu_ps(centers_dim_vec + idx);
+            __m256 acc = _mm256_load_ps(chunk_dists + idx);
+            acc = _mm256_fnmadd_ps(q_vec, center_vals, acc);
+            _mm256_store_ps(chunk_dists + idx, acc);
           }
         }
       }
