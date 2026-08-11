@@ -78,6 +78,9 @@ class DynamicIndex : public BaseDynamicIndex {
   }
 
   ~DynamicIndex() {
+    if (use_mem_index_for_disk_index_ && disk_index_) {
+      disk_index_->mem_index_.release();
+    }
   }
 
   // Releases the calling thread's io_uring context. An ephemeral worker
