@@ -28,11 +28,10 @@ namespace pipeann {
                                              std::vector<Neighbor> &full_retset, QueryStats *stats,
                                              InsertContext *insert_ctx, float range_partial) {
     QueryBuffer *query_buf = pop_query_buf(query1);
-#ifdef USE_URING
-    void *ctx = reader->get_ctx(IORING_SETUP_SQPOLL);
-#else
+    // A search thread spin-polls its own completions (poll_all), so an
+    // SQPOLL kernel thread doubles the cores one search thread needs.
+    // Insert already avoids it (direct_insert.cpp:33); search follows.
     void *ctx = reader->get_ctx();
-#endif
 
     if (beam_width > MAX_N_SECTOR_READS) {
       LOG(ERROR) << "Beamwidth can not be higher than MAX_N_SECTOR_READS";
