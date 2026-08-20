@@ -47,6 +47,10 @@ template<class T>
 class DynamicIndex : public BaseDynamicIndex {
   static constexpr float kMemIndexP = 0.01;
   static constexpr uint32_t kBuildThreshold = 100000;
+  // Beam width for query search, i.e. how many records a hop reads at once.
+  // OdinANN (FAST '26) evaluates at 4; insert is unaffected, its internal
+  // search takes params.beam_width instead (see direct_insert.cpp).
+  static constexpr uint32_t kSearchBeamWidth = 4;
   using TagT = uint32_t;
 
  public:
@@ -293,11 +297,13 @@ class DynamicIndex : public BaseDynamicIndex {
     size_t n_valid = L;
 
     if (selector != nullptr) {
-      disk_index_->spec_filter_search(query, L, L, selector, *query_attrs, tags.data(), distances.data(), 32, stats);
+      disk_index_->spec_filter_search(query, L, L, selector, *query_attrs, tags.data(), distances.data(),
+                                      kSearchBeamWidth, stats);
     } else if (use_range) {
-      n_valid = disk_index_->range_search(query, range, tags.data(), distances.data(), 32, mem_L, L, stats);
+      n_valid =
+          disk_index_->range_search(query, range, tags.data(), distances.data(), kSearchBeamWidth, mem_L, L, stats);
     } else if (use_disk_index_) {
-      disk_index_->pipe_search(query, L, mem_L, L, tags.data(), distances.data(), 32, stats);
+      disk_index_->pipe_search(query, L, mem_L, L, tags.data(), distances.data(), kSearchBeamWidth, stats);
     } else {
       mem_index_->search_with_tags(query, L, L, tags.data(), distances.data());
     }
