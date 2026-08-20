@@ -48,10 +48,9 @@ class DynamicIndex : public BaseDynamicIndex {
   static constexpr float kMemIndexP = 0.01;
   static constexpr uint32_t kBuildThreshold = 100000;
   // Beam width for query search, i.e. how many records a hop reads at once.
-  // OdinANN (FAST '26) evaluates at 4; that cost ~10% throughput here, but
-  // only through the SQPOLL stall, so measure again at 8. Insert is
-  // unaffected, its internal search takes params.beam_width instead.
-  static constexpr uint32_t kSearchBeamWidth = 8;
+  // OdinANN (FAST '26) evaluates at 4. Insert is unaffected, its internal
+  // search takes params.beam_width instead (see direct_insert.cpp).
+  static constexpr uint32_t kSearchBeamWidth = 4;
   using TagT = uint32_t;
 
  public:
