@@ -621,7 +621,7 @@ void *LinuxAlignedFileReader::get_ctx(int flag) {
 void LinuxAlignedFileReader::register_thread(int flag) {
   if (ioctx::ring == nullptr) {
     ioctx::ring = new io_uring();
-    int ret = io_uring_queue_init(MAX_EVENTS, ioctx::ring, flag);
+    int ret = io_uring_queue_init(MAX_EVENTS, ioctx::ring, flag | IORING_SETUP_COOP_TASKRUN);
     if (ret != 0) {
       LOG(ERROR) << "io_uring_queue_init failed: " << strerror(-ret);
       crash();
