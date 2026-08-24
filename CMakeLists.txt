@@ -185,3 +185,7 @@ target_link_libraries(pipeann_sift_5m5m_smoke ${PROJECT_NAME})
 add_executable(pipeann_deep_5m5m_smoke ${EVALDIR}/bench_pipeann_deep_5m5m_smoke.cpp)
 target_include_directories(pipeann_deep_5m5m_smoke PRIVATE ${EVALDIR})
 target_link_libraries(pipeann_deep_5m5m_smoke ${PROJECT_NAME})
+
+add_executable(pipeann_deep_1thread ${EVALDIR}/bench_pipeann_deep_1thread.cpp)
+target_include_directories(pipeann_deep_1thread PRIVATE ${EVALDIR})
+target_link_libraries(pipeann_deep_1thread ${PROJECT_NAME})
