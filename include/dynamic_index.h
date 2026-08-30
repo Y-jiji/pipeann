@@ -59,12 +59,20 @@ class DynamicIndex : public BaseDynamicIndex {
  public:
   DynamicIndex() = delete;
 
-  explicit DynamicIndex(uint32_t data_dim, pipeann::Metric metric, pipeann::IndexBuildParameters *params = nullptr)
+  // `reader` overrides the default io_uring reader. The trace driver passes a
+  // reader whose completions follow a fixed schedule instead of the device,
+  // which is the only way a search trace can be compared event for event.
+  explicit DynamicIndex(uint32_t data_dim, pipeann::Metric metric, pipeann::IndexBuildParameters *params = nullptr,
+                        std::shared_ptr<AlignedFileReader> reader = nullptr)
       : data_dim_(data_dim), metric_(metric) {
     if (params != nullptr) {
       params_ = *params;
     }
-    reader_.reset(new LinuxAlignedFileReader());
+    if (reader) {
+      reader_ = std::move(reader);
+    } else {
+      reader_.reset(new LinuxAlignedFileReader());
+    }
     nbr_handler_ = new pipeann::PQNeighbor<T>(metric_);
     mem_index_.reset(new pipeann::Index<T, TagT>(metric_, data_dim_));
     disk_index_.reset(new pipeann::SSDIndex<T, TagT>(metric_, reader_, nbr_handler_, true, params));
