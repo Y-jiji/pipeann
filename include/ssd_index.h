@@ -71,6 +71,27 @@ namespace pipeann {
       return meta_.sector_to_loc(sector_no, sector_off);
     }
 
+    // Trace-driver access: score every vertex in [0, n) against `query` in
+    // PQ space, into `out`. A search scores only the neighbours it happens to
+    // meet, so a trace captured here could only ever be replayed along this
+    // run's own path; the whole vector lets a replay follow the graph
+    // anywhere and diverge visibly. No behaviour of its own.
+    void estimate_all(const T *query, uint64_t n, float *out) {
+      QueryBuffer *buf = pop_query_buf(query);
+      buf->reset();
+      nbr_handler->initialize_query(buf->template aligned_query<T>(), buf);
+      std::vector<uint32_t> ids(MAX_N_EDGES);
+      for (uint64_t i = 0; i < n; i += MAX_N_EDGES) {
+        const uint64_t m = std::min<uint64_t>(MAX_N_EDGES, n - i);
+        for (uint64_t j = 0; j < m; j++) {
+          ids[j] = static_cast<uint32_t>(i + j);
+        }
+        nbr_handler->compute_dists(buf, ids.data(), m);
+        memcpy(out + i, buf->aligned_dist_scratch, m * sizeof(float));
+      }
+      push_query_buf(buf);
+    }
+
     void init_metadata(const SSDIndexMetadata<T> &meta) {
       meta.print();
       this->meta_ = meta;

@@ -1,10 +1,20 @@
 #pragma once
-// Instrumentation-only trace sink for pipe_search_common.h. Compiled in
-// only under -DPIPE_TRACE; every call site is guarded so a normal build
-// carries neither the branch nor the symbol.
+// Instrumentation-only trace sinks for pipe_search_common.h. Compiled in only
+// under -DPIPE_TRACE; every call site is guarded so a normal build carries
+// neither the branch nor the symbol.
 //
-// One line per event, appended to $PIPE_TRACE_FILE. The grammar is
-// documented at the emit sites in pipe_search_common.h.
+// Two sinks, because the records fall into two kinds and a replay must not see
+// the second while producing its own:
+//
+//   PTRACE_IN  ($PIPE_TRACE_IN)  what the search was given -- query
+//                                parameters, the seed pool, the graph it was
+//                                shown.
+//   PTRACE_REF ($PIPE_TRACE_REF) what the search decided -- reads issued,
+//                                completions reaped per poll, beam width,
+//                                termination.
+//
+// Splitting here rather than by filtering the log afterwards keeps the
+// distinction where it is actually known.
 
 #ifdef PIPE_TRACE
 #include <cstdarg>
@@ -12,19 +22,23 @@
 #include <cstdlib>
 
 namespace pipeann {
-  /// Trace sink, opened once from $PIPE_TRACE_FILE. Null when the
-  /// variable is unset, which turns every PTRACE into a no-op.
-  inline FILE *ptrace_sink() {
-    static FILE *sink = [] {
-      const char *path = std::getenv("PIPE_TRACE_FILE");
-      return path == nullptr ? (FILE *) nullptr : std::fopen(path, "w");
-    }();
+  inline FILE *ptrace_open(const char *var) {
+    const char *path = std::getenv(var);
+    return path == nullptr ? (FILE *) nullptr : std::fopen(path, "w");
+  }
+
+  inline FILE *ptrace_in() {
+    static FILE *sink = ptrace_open("PIPE_TRACE_IN");
     return sink;
   }
 
-  /// Append one trace line.
-  inline void ptrace_emit(const char *fmt, ...) {
-    FILE *sink = ptrace_sink();
+  inline FILE *ptrace_ref() {
+    static FILE *sink = ptrace_open("PIPE_TRACE_REF");
+    return sink;
+  }
+
+  /// Append one record to `sink`, if it is open.
+  inline void ptrace_emit(FILE *sink, const char *fmt, ...) {
     if (sink == nullptr) {
       return;
     }
@@ -36,7 +50,9 @@ namespace pipeann {
   }
 }  // namespace pipeann
 
-#define PTRACE(...) ::pipeann::ptrace_emit(__VA_ARGS__)
+#define PTRACE_IN(...) ::pipeann::ptrace_emit(::pipeann::ptrace_in(), __VA_ARGS__)
+#define PTRACE_REF(...) ::pipeann::ptrace_emit(::pipeann::ptrace_ref(), __VA_ARGS__)
 #else
-#define PTRACE(...) ((void) 0)
+#define PTRACE_IN(...) ((void) 0)
+#define PTRACE_REF(...) ((void) 0)
 #endif

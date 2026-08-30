@@ -105,7 +105,6 @@ class DynamicIndex : public BaseDynamicIndex {
   // several widths to exercise the adaptive ramp. Neither accessor has any
   // behaviour of its own.
   pipeann::SSDIndex<T, TagT> *disk_index() { return disk_index_.get(); }
-  uint32_t mem_l() const { return mem_L; }
 
   // Load an index from disk.
   // If copy_to_shadow is true, the disk index is first copied to a shadow prefix
