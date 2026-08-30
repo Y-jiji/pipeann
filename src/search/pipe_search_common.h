@@ -5,6 +5,8 @@
 #include "liburing.h"
 #endif
 
+#include "utils/pipe_trace.h"
+
 namespace pipeann {
 
   // Common pipelined search loop used by pipe_search, spec_postfilter_search, and spec_infilter_search.
@@ -60,6 +62,7 @@ namespace pipeann {
       T *node_fp_coords_copy = data_buf;
       memcpy(node_fp_coords_copy, node.coords, meta_.data_dim * sizeof(T));
       float cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy, (unsigned) aligned_dim);
+      PTRACE("D %u %.9g", id, (double) cur_expanded_dist);
       if (stats != nullptr) {
         stats->n_exact++;
       }
@@ -128,6 +131,7 @@ namespace pipeann {
             stats->n_cmps++;
           }
 
+          PTRACE("N %u %.9g", (unsigned) nbor_id, (double) nbor_dist);
           Neighbor nn(nbor_id, nbor_dist, true, m < n_member);
           if (nn >= retset[cur_list_size - 1] && (cur_list_size == l_pool))
             continue;
@@ -147,6 +151,7 @@ namespace pipeann {
 
     auto add_to_retset = [&](const unsigned *node_ids, const uint64_t n_ids, float *dists) {
       for (uint64_t i = 0; i < n_ids; ++i) {
+        PTRACE("S0 %lu %u %.9g", (unsigned long) cur_list_size, node_ids[i], (double) dists[i]);
         retset[cur_list_size++] = Neighbor(node_ids[i], dists[i], true);
         visited.insert(node_ids[i]);
       }
@@ -172,6 +177,7 @@ namespace pipeann {
     } else {
       nbr_handler->initialize_query(query, query_buf);
       nbr_handler->compute_dists(query_buf, &meta_.entry_point_id, 1);
+      PTRACE("S0 0 %u %.9g", meta_.entry_point_id, (double) dist_scratch[0]);
       retset[cur_list_size++] = Neighbor(meta_.entry_point_id, dist_scratch[0], true, false);
       visited.insert(meta_.entry_point_id);
     }
@@ -195,6 +201,7 @@ namespace pipeann {
     std::queue<io_t> on_flight_ios;
 
     auto send_read_req = [&](Neighbor &item) -> bool {
+      PTRACE("I %u", item.id);
       item.flag = false;
       this->lock_idx(idx_lock_table, item.id, std::vector<uint32_t>(), true);
       const unsigned loc = id2loc(item.id), pid = loc_sector_no(loc);
@@ -229,10 +236,13 @@ namespace pipeann {
         if (insert_ctx != nullptr) {
           insert_ctx->hint_pages.push_back(io.page_id);
         }
-        io.nbr.distance <= retset[cur_list_size - 1].distance ? ++n_in : ++n_out;
+        const bool in_pool = io.nbr.distance <= retset[cur_list_size - 1].distance;
+        PTRACE("C %u %d", io.nbr.id, (int) in_pool);
+        in_pool ? ++n_in : ++n_out;
         this->unlock_idx(idx_lock_table, io.nbr.id);
         on_flight_ios.pop();
       }
+      PTRACE("P %u %u", n_in, n_out);
       return std::make_pair(n_in, n_out);
     };
 
@@ -257,6 +267,7 @@ namespace pipeann {
       unsigned marker = 0, nk = cur_list_size, first_unvisited_eager = cur_list_size;
       for (marker = 0; marker < cur_list_size; ++marker) {
         if (!retset[marker].visited && id_buf_map.find(retset[marker].id) != id_buf_map.end()) {
+          PTRACE("X %u %u", retset[marker].id, marker);
           retset[marker].flag = false;
           retset[marker].visited = true;
           auto it = id_buf_map.find(retset[marker].id);
@@ -300,11 +311,17 @@ namespace pipeann {
           break;
         }
       }
-      return is_member_cnt >= l_search || ret == -1 || range_crossed;
+      const bool stop = is_member_cnt >= l_search || ret == -1 || range_crossed;
+      if (stop) {
+        PTRACE("T %lu %d %d", (unsigned long) is_member_cnt, ret, (int) range_crossed);
+      }
+      return stop;
     };
 
     // --- Main search loop ---
     auto cpu2_st = std::chrono::high_resolution_clock::now();
+    PTRACE("Q %lu %lu %lu %u %lu", (unsigned long) l_search, (unsigned long) l_pool, (unsigned long) beam_width, mem_L,
+           (unsigned long) cur_list_size);
     send_best_read_req(cur_beam_width - on_flight_ios.size());
     unsigned marker = 0, max_marker = 0;
 
@@ -315,6 +332,9 @@ namespace pipeann {
         retset[i].distance = dist_scratch[i];
       }
       std::sort(retset.begin(), retset.begin() + cur_list_size);
+      for (unsigned i = 0; i < cur_list_size; ++i) {
+        PTRACE("S1 %u %u %.9g", i, retset[i].id, (double) retset[i].distance);
+      }
     }
 
     int cur_n_in = 0, cur_tot = 0;
@@ -339,6 +359,7 @@ namespace pipeann {
       }
       marker = calc_best_node();
       max_marker = std::max(max_marker, marker);
+      PTRACE("B %ld %u %u", (long) cur_beam_width, marker, max_marker);
     }
 
     // Drain remaining in-flight IOs.

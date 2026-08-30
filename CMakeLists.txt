@@ -165,6 +165,11 @@ if(BLAS_FOUND)
     endif()
 endif()
 
+option(PIPE_TRACE "emit a pipe_search event trace to $PIPE_TRACE_FILE" OFF)
+if(PIPE_TRACE)
+	add_definitions(-DPIPE_TRACE)
+endif()
+
 add_subdirectory(src)
 
 # tests/ and tests/utils/ are dropped: they share eleven target names with
@@ -189,3 +194,11 @@ target_link_libraries(pipeann_deep_5m5m_smoke ${PROJECT_NAME})
 add_executable(pipeann_deep_1thread ${EVALDIR}/bench_pipeann_deep_1thread.cpp)
 target_include_directories(pipeann_deep_1thread PRIVATE ${EVALDIR})
 target_link_libraries(pipeann_deep_1thread ${PROJECT_NAME})
+
+# Trace driver: builds a small synthetic index in a scratch directory and runs
+# one pipe_search under PIPE_TRACE, so the trace can be replayed against the
+# Rust searcher. PIPE_TRACE is set on the whole directory because the emit
+# sites live in pipe_search_common.h, which is compiled into the library.
+add_executable(trace_pipeann ${EVALDIR}/trace_pipeann.cpp)
+target_include_directories(trace_pipeann PRIVATE ${EVALDIR})
+target_link_libraries(trace_pipeann ${PROJECT_NAME})

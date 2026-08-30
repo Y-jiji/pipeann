@@ -92,6 +92,13 @@ class DynamicIndex : public BaseDynamicIndex {
   // fds leak (raw-pointer TLS runs no destructor on thread exit).
   void deregister_thread() { reader_->deregister_thread(); }
 
+  // Trace-driver access: pipe_search's beam width is fixed at
+  // kSearchBeamWidth on the search() path, but a trace has to be captured at
+  // several widths to exercise the adaptive ramp. Neither accessor has any
+  // behaviour of its own.
+  pipeann::SSDIndex<T, TagT> *disk_index() { return disk_index_.get(); }
+  uint32_t mem_l() const { return mem_L; }
+
   // Load an index from disk.
   // If copy_to_shadow is true, the disk index is first copied to a shadow prefix
   // to avoid polluting the original index during in-place inserts.
