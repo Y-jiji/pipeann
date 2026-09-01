@@ -195,6 +195,10 @@ add_executable(pipeann_deep_1thread ${EVALDIR}/bench_pipeann_deep_1thread.cpp)
 target_include_directories(pipeann_deep_1thread PRIVATE ${EVALDIR})
 target_link_libraries(pipeann_deep_1thread ${PROJECT_NAME})
 
+add_executable(pipeann_sift_threads ${EVALDIR}/bench_pipeann_sift_threads.cpp)
+target_include_directories(pipeann_sift_threads PRIVATE ${EVALDIR})
+target_link_libraries(pipeann_sift_threads ${PROJECT_NAME})
+
 # Trace driver: builds a small synthetic index in a scratch directory and runs
 # one pipe_search under PIPE_TRACE, so the trace can be replayed against the
 # Rust searcher. PIPE_TRACE is set on the whole directory because the emit
