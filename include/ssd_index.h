@@ -173,6 +173,18 @@ namespace pipeann {
     static void save_from_mem(Index<T, TagT> &mem, const std::string &disk_file, uint16_t target_dense_width = 0,
                               AttrWriter *attr_writer = nullptr);
 
+    // Empty neighbor slot in a graph file handed to save_from_graph.
+    static constexpr uint32_t kGraphPad = 0xFFFFFFFF;
+
+    // Write an SSD-format disk file at {disk_file} from a base file and a graph built elsewhere,
+    // streaming both so neither is ever held whole. {base_file} is a bin file (uint32 npts,
+    // uint32 dim, then packed coords) and {graph_file} a headerless npts * range matrix of uint32
+    // neighbor ids, rows in id order, unused slots holding kGraphPad. The entry point is the node
+    // nearest the centroid, as Index::calculate_entry_point picks it. No tags file is written:
+    // ids and tags coincide, which is what id2tag falls back to.
+    static void save_from_graph(const std::string &base_file, const std::string &graph_file,
+                                const std::string &disk_file, uint32_t range);
+
     // Read an SSD-format disk file at {disk_file} (+ {disk_file}.tags if present) into an Index.
     // Caller owns the returned pointer.
     static Index<T, TagT> *load_to_mem(const std::string &disk_file, Metric metric);

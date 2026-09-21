@@ -126,6 +126,11 @@ namespace pipeann {
     }
     writes_4k.pop_back();
 
+    if (stats != nullptr) {
+      for (auto &req : reads) {
+        stats->n_rmw_reads += (double) req.len / SECTOR_LEN;
+      }
+    }
     reader->read_alloc(reads, ctx, &insert_ctx.page_ref);
 
     // update the target node.

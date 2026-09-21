@@ -16,6 +16,8 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <limits>
 #include <thread>
 #include "utils/tsl/robin_set.h"
 
@@ -401,6 +403,197 @@ namespace pipeann {
 
     mem.save_tags(disk_file + ".tags");
     LOG(INFO) << "save_from_mem: wrote " << disk_file;
+  }
+
+  namespace {
+    // One streaming pass reads this many points at a time, so neither the base
+    // file nor the graph is ever resident whole.
+    constexpr uint64_t kStreamPoints = 1 << 19;
+
+    /** @brief Reads the next `count` points of an open base file into `buf`.
+     *  @tparam T coordinate type
+     *  @param in open stream, positioned at the first coordinate to read
+     *  @param count points to read
+     *  @param data_dim coordinates per point
+     *  @param buf destination, at least count * data_dim elements
+     *  @return nothing; a short read is fatal
+     */
+    template<typename T>
+    void read_points(std::ifstream &in, uint64_t count, uint64_t data_dim, T *buf) {
+      in.read((char *) buf, count * data_dim * sizeof(T));
+      if (!in) {
+        LOG(ERROR) << "save_from_graph: base file ended early";
+        crash();
+      }
+    }
+
+    /** @brief Picks the node nearest the centroid, as Index::calculate_entry_point does.
+     *  @tparam T coordinate type
+     *  @param base_file bin file holding the points
+     *  @param npoints points in the file
+     *  @param data_dim coordinates per point
+     *  @return id of the node nearest the centroid
+     */
+    template<typename T>
+    uint64_t centroid_node(const std::string &base_file, uint64_t npoints, uint64_t data_dim) {
+      std::vector<double> total(data_dim, 0.0);
+      std::vector<T> buf(kStreamPoints * data_dim);
+
+      std::ifstream in(base_file, std::ios::binary);
+      in.seekg(2 * sizeof(uint32_t), std::ios::beg);
+      for (uint64_t done = 0; done < npoints;) {
+        const uint64_t count = std::min(kStreamPoints, npoints - done);
+        read_points<T>(in, count, data_dim, buf.data());
+        for (uint64_t i = 0; i < count; i++) {
+          for (uint64_t d = 0; d < data_dim; d++) {
+            total[d] += (double) buf[i * data_dim + d];
+          }
+        }
+        done += count;
+      }
+
+      std::vector<float> center(data_dim);
+      for (uint64_t d = 0; d < data_dim; d++) {
+        center[d] = (float) (total[d] / (double) npoints);
+      }
+
+      uint64_t best = 0;
+      double least = std::numeric_limits<double>::max();
+      in.clear();
+      in.seekg(2 * sizeof(uint32_t), std::ios::beg);
+      for (uint64_t done = 0; done < npoints;) {
+        const uint64_t count = std::min(kStreamPoints, npoints - done);
+        read_points<T>(in, count, data_dim, buf.data());
+#pragma omp parallel
+        {
+          uint64_t mine = 0;
+          double closest = std::numeric_limits<double>::max();
+#pragma omp for schedule(static) nowait
+          for (uint64_t i = 0; i < count; i++) {
+            double span = 0.0;
+            for (uint64_t d = 0; d < data_dim; d++) {
+              const double gap = (double) buf[i * data_dim + d] - center[d];
+              span += gap * gap;
+            }
+            if (span < closest) {
+              closest = span;
+              mine = done + i;
+            }
+          }
+#pragma omp critical
+          if (closest < least) {
+            least = closest;
+            best = mine;
+          }
+        }
+        done += count;
+      }
+      return best;
+    }
+  }  // namespace
+
+  template<typename T, typename TagT>
+  void SSDIndex<T, TagT>::save_from_graph(const std::string &base_file, const std::string &graph_file,
+                                          const std::string &disk_file, uint32_t range) {
+    size_t base_npts = 0, base_dim = 0;
+    get_bin_metadata(base_file, base_npts, base_dim);
+    const uint64_t npoints = base_npts, data_dim = base_dim;
+
+    std::ifstream probe(graph_file, std::ios::binary | std::ios::ate);
+    const uint64_t want = npoints * range * sizeof(uint32_t);
+    if (!probe || (uint64_t) probe.tellg() != want) {
+      LOG(ERROR) << "save_from_graph: " << graph_file << " should hold " << want << " bytes for " << npoints
+                 << " rows of " << range;
+      crash();
+    }
+    probe.close();
+
+    const uint64_t max_node_len = (range + 1) * sizeof(uint32_t) + data_dim * sizeof(T);
+    if (max_node_len > SECTOR_LEN) {
+      LOG(ERROR) << "save_from_graph: node of " << max_node_len << " bytes exceeds one sector";
+      crash();
+    }
+
+    const uint64_t entry_point = centroid_node<T>(base_file, npoints, data_dim);
+    LOG(INFO) << "save_from_graph: " << npoints << " points, dim " << data_dim << ", range " << range
+              << ", entry point " << entry_point;
+
+    SSDIndexMetadata<T> meta(npoints, data_dim, entry_point, max_node_len, SECTOR_LEN / max_node_len, range, 0, 0);
+
+    std::remove(disk_file.c_str());
+    int fd = open(disk_file.c_str(), O_DIRECT | O_LARGEFILE | O_RDWR | O_CREAT, 0644);
+    if (fd < 0) {
+      LOG(ERROR) << "save_from_graph: open " << disk_file << " " << strerror(errno);
+      crash();
+    }
+    meta.save_to_disk_index(disk_file);
+
+    const uint64_t unit_bytes = meta.io_size_dense();
+    const uint64_t unit_nodes = meta.nodes_per_io();
+    const uint64_t batch_units = std::max<uint64_t>(1, (64 << 20) / unit_bytes);
+
+    char *buf = nullptr;
+    alloc_aligned((void **) &buf, batch_units * unit_bytes, SECTOR_LEN);
+    std::vector<T> coords(batch_units * unit_nodes * data_dim);
+    std::vector<uint32_t> edges(batch_units * unit_nodes * range);
+
+    std::ifstream base(base_file, std::ios::binary);
+    base.seekg(2 * sizeof(uint32_t), std::ios::beg);
+    std::ifstream graph(graph_file, std::ios::binary);
+
+    uint64_t kept = 0, dropped = 0;
+    for (uint64_t loc = 0; loc < npoints;) {
+      const uint64_t cur_nodes = std::min(batch_units * unit_nodes, npoints - loc);
+      const uint64_t write_bytes = DIV_ROUND_UP(cur_nodes, unit_nodes) * unit_bytes;
+      memset(buf, 0, write_bytes);
+
+      read_points<T>(base, cur_nodes, data_dim, coords.data());
+      graph.read((char *) edges.data(), cur_nodes * range * sizeof(uint32_t));
+      if (!graph) {
+        LOG(ERROR) << "save_from_graph: graph file ended early at " << loc;
+        crash();
+      }
+
+#pragma omp parallel for schedule(static) reduction(+ : kept, dropped)
+      for (uint64_t i = 0; i < cur_nodes; i++) {
+        DiskNode<T> node(buf + (i / unit_nodes) * unit_bytes, (uint32_t) (loc + i), meta);
+        memcpy(node.coords, coords.data() + i * data_dim, data_dim * sizeof(T));
+
+        uint16_t count = 0;
+        for (uint64_t slot = 0; slot < range; slot++) {
+          const uint32_t nbr = edges[i * range + slot];
+          if (nbr == kGraphPad) {
+            continue;
+          }
+          if (nbr >= npoints) {
+            dropped++;
+            continue;
+          }
+          node.nbrs[count++] = nbr;
+        }
+        node.nnbrs = count;
+        node.n_dense_nbrs = 0;
+        kept += count;
+      }
+
+      const uint64_t write_offset = meta.loc_sector_no(loc) * SECTOR_LEN;
+      ssize_t ret = ::pwrite(fd, buf, write_bytes, write_offset);
+      if (ret != static_cast<ssize_t>(write_bytes)) {
+        LOG(ERROR) << "save_from_graph: write " << disk_file << " offset=" << write_offset << " bytes=" << write_bytes
+                   << " ret=" << ret << (ret < 0 ? std::string(" err=") + strerror(errno) : std::string());
+        crash();
+      }
+
+      loc += cur_nodes;
+      if (loc % 10000000 < cur_nodes) {
+        LOG(INFO) << "save_from_graph: nodes written " << loc << "/" << npoints;
+      }
+    }
+
+    aligned_free(buf);
+    close(fd);
+    LOG(INFO) << "save_from_graph: wrote " << disk_file << ", " << kept << " edges kept, " << dropped
+              << " out of range";
   }
 
   template<typename T, typename TagT>

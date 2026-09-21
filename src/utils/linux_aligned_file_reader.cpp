@@ -4,6 +4,7 @@
 #if defined(USE_SPDK)
 #include "linux_aligned_file_reader.h"
 #include "utils.h"
+#include "utils/iocount.h"
 #include "utils/log.h"
 #include "utils/picojson.h"
 #include "utils/concurrent_queue.h"
@@ -20,6 +21,10 @@
 #include <chrono>
 #include <pthread.h>
 #include "liburing.h"
+
+namespace pipeann {
+  thread_local uint64_t tls_dev_reads = 0;
+}
 
 namespace {
   static constexpr uint32_t STRIPE_SIZE = SECTOR_LEN;
@@ -413,6 +418,9 @@ void LinuxAlignedFileReader::send_io(IORequest &req, void *ctx, bool wr) {
   int tid = (intptr_t) ctx;
   req.n_pending = 0;
   req.finished = false;
+  if (!wr) {
+    pipeann::tls_dev_reads += req.len / SECTOR_LEN;
+  }
 
   const uint32_t lba_shift = g_spdk.lba_shift;
 
@@ -692,6 +700,9 @@ void LinuxAlignedFileReader::send_io(IORequest &req, void *ctx, bool write) {
   io_uring *ring = (io_uring *) ctx;
   auto sqe = io_uring_get_sqe(ring);
   req.finished = false;
+  if (!write) {
+    pipeann::tls_dev_reads += req.len / SECTOR_LEN;
+  }
   sqe->user_data = (uint64_t) &req;
   if (write) {
     io_uring_prep_write(sqe, fd, req.buf, req.len, req.offset);
@@ -928,6 +939,9 @@ void LinuxAlignedFileReader::write_fd(int fd, std::vector<IORequest> &write_reqs
 void LinuxAlignedFileReader::send_io(IORequest &req, void *ctx, bool write) {
   auto cb = new iocb_t;
   req.finished = false;
+  if (!write) {
+    pipeann::tls_dev_reads += req.len / SECTOR_LEN;
+  }
   if (write) {
     io_prep_pwrite(cb, fd, req.buf, req.len, req.offset);
   } else {

@@ -20,6 +20,7 @@ namespace pipeann {
     double n_exact = 0;         // # full-precision distances computed over fetched coords
     double n_hops = 0;          // # search hops
     double n_current_used = 0;  // # force return for latency limit
+    double n_rmw_reads = 0;     // # pages this insert's graph-mutation read-modify-write asked to re-read
     double n_pages_touched = 0; // # distinct disk pages touched by this insert's graph-mutation read-modify-write
     double n_out_edges = 0;     // # outgoing edges written for the newly-inserted node
     double n_in_edges = 0;      // # existing neighbors whose edge list gained a back-edge to the new node

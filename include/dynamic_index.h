@@ -144,6 +144,37 @@ class DynamicIndex : public BaseDynamicIndex {
     }
   }
 
+  // Load an index whose graph was built elsewhere: {graph_file} is a headerless
+  // npts * range matrix of uint32 neighbor ids over the points of {base_file}.
+  // Materializes {index_prefix}_disk.index and the PQ files the search path needs,
+  // then loads them in place -- inserts mutate that one copy, and rerunning this
+  // rebuilds it. Both artifacts are reused when they already exist, since the PQ
+  // tables depend on the base points alone. No nav graph is built, so search seeds
+  // from the entry point stored in the index.
+  void load_graph(const std::string &index_prefix, const std::string &base_file, const std::string &graph_file,
+                  uint32_t range, uint32_t PQ_bytes = 0) {
+    if (PQ_bytes == 0) {
+      size_t nr = 0, nc = 0;
+      pipeann::get_bin_metadata(base_file, nr, nc);
+      PQ_bytes = std::min(std::max((uint32_t) (nc / 4), 32u), 128u);
+    }
+
+    auto disk_index_file = index_prefix + "_disk.index";
+    if (!file_exists(disk_index_file)) {
+      pipeann::SSDIndex<T, TagT>::save_from_graph(base_file, graph_file, disk_index_file, range);
+    } else {
+      LOG(INFO) << "load_graph: reusing " << disk_index_file;
+    }
+
+    if (!file_exists(index_prefix + "_pq_pivots.bin") || !file_exists(index_prefix + "_pq_compressed.bin")) {
+      nbr_handler_->build(index_prefix, base_file, PQ_bytes);
+    } else {
+      LOG(INFO) << "load_graph: reusing " << index_prefix << "_pq_*.bin";
+    }
+
+    load(index_prefix, false);
+  }
+
   void transform_mem_index_to_disk_index() {
     auto mu = std::lock_guard<std::shared_mutex>(save_mu_);
     LOG(INFO) << "Transform memory index to disk index.";

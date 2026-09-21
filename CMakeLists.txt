@@ -178,7 +178,7 @@ add_subdirectory(src)
 # systems' bench code can be read side by side, but they must be compiled
 # here to inherit this directory's definitions.
 foreach(dataset sift deep spacev)
-	add_executable(pipeann_${dataset} ${EVALDIR}/bench_pipeann_${dataset}.cpp)
-	target_include_directories(pipeann_${dataset} PRIVATE ${EVALDIR})
+	add_executable(pipeann_${dataset} "${EVALDIR}/bench_pipeann_${dataset}.cpp")
+	target_include_directories(pipeann_${dataset} PRIVATE "${EVALDIR}")
 	target_link_libraries(pipeann_${dataset} ${PROJECT_NAME})
 endforeach()
