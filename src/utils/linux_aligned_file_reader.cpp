@@ -1,10 +1,15 @@
 #include <bits/types/struct_iovec.h>
 #include "ssd_index_defs.h"
 #include "utils/lock_table.h"
+#include "utils/iocount.h"
+
+namespace pipeann {
+  thread_local uint64_t tls_dev_reads = 0;
+}
+
 #if defined(USE_SPDK)
 #include "linux_aligned_file_reader.h"
 #include "utils.h"
-#include "utils/iocount.h"
 #include "utils/log.h"
 #include "utils/picojson.h"
 #include "utils/concurrent_queue.h"
@@ -21,10 +26,6 @@
 #include <chrono>
 #include <pthread.h>
 #include "liburing.h"
-
-namespace pipeann {
-  thread_local uint64_t tls_dev_reads = 0;
-}
 
 namespace {
   static constexpr uint32_t STRIPE_SIZE = SECTOR_LEN;
