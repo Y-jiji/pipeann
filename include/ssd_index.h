@@ -232,6 +232,13 @@ namespace pipeann {
     void start_bg_io();
     void stop_bg_io();
 
+    /**
+     * @brief Write the disk index's graph as a ParlayANN graph, node and neighbors as tags
+     * SHAME(TALLFUNC)
+     * @param path output file: u32 nodes, u32 range, every degree, then every neighbor list
+     */
+    void dumpgraph(const std::string &path);
+
     // Merge deletes (NOTE: index read-only during merge.)
     // Returns id_map: old_id -> new_id.
     libcuckoo::cuckoohash_map<uint32_t, uint32_t> merge_deletes(const std::string &in_path_prefix,

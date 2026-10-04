@@ -1,7 +1,9 @@
 #include "aligned_file_reader.h"
 #include "linux_aligned_file_reader.h"
 #include "ssd_index.h"
+#include <fcntl.h>
 #include <malloc.h>
+#include <unistd.h>
 
 #include <omp.h>
 #include <cmath>
@@ -13,6 +15,7 @@
 #include "utils/timer.h"
 #include "utils.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -988,6 +991,75 @@ namespace pipeann {
       }
     }
     LOG(INFO) << "loc2ID consistency check passed.";
+  }
+
+  template<typename T, typename TagT>
+  void SSDIndex<T, TagT>::dumpgraph(const std::string &path) {
+    // [1]
+    const uint64_t total = cur_id.load();
+    const uint64_t range = meta_.range;
+    if (meta_.nnodes_per_sector == 0) {
+      LOG(ERROR) << "dumpgraph: a node spans several sectors, unsupported";
+      crash();
+    }
+    std::vector<std::pair<uint32_t, uint32_t>> order(total);
+    std::vector<uint32_t> rows(total);
+#pragma omp parallel for schedule(static)
+    for (int64_t id = 0; id < (int64_t) total; id++) {
+      order[id] = {id2loc((uint32_t) id), (uint32_t) id};
+      rows[id] = (uint32_t) id2tag((uint32_t) id);
+    }
+    std::sort(order.begin(), order.end());
+    // [2]
+    constexpr uint64_t CHUNK = 4096;
+    std::vector<uint32_t> degrees(total, kInvalidID);
+    std::vector<uint32_t> edges(total * range);
+    char *buf = (char *) std::aligned_alloc(SECTOR_LEN, CHUNK * SECTOR_LEN);
+    const int fd = ::open(disk_index_file.c_str(), O_RDONLY | O_DIRECT);
+    if (fd < 0 || buf == nullptr) {
+      LOG(ERROR) << "dumpgraph: cannot read " << disk_index_file;
+      crash();
+    }
+    uint64_t first = 0, count = 0;
+    for (const auto &[loc, id] : order) {
+      const uint64_t sector = loc_sector_no(loc);
+      if (sector >= first + count) {
+        first = sector;
+        const ssize_t got = ::pread(fd, buf, CHUNK * SECTOR_LEN, first * SECTOR_LEN);
+        count = got > 0 ? (uint64_t) got / SECTOR_LEN : 0;
+      }
+      const uint32_t row = rows[id];
+      if (sector >= first + count || row >= total || degrees[row] != kInvalidID) {
+        LOG(ERROR) << "dumpgraph: id " << id << " at loc " << loc << " as row " << row;
+        crash();
+      }
+      DiskNode<T> node = node_from_page(buf + (sector - first) * SECTOR_LEN, loc);
+      if (node.nnbrs > range) {
+        LOG(ERROR) << "dumpgraph: id " << id << " has " << node.nnbrs << " neighbors";
+        crash();
+      }
+      degrees[row] = node.nnbrs;
+      for (uint32_t j = 0; j < node.nnbrs; j++) {
+        if (node.nbrs[j] >= total) {
+          LOG(ERROR) << "dumpgraph: id " << id << " points to " << node.nbrs[j];
+          crash();
+        }
+        edges[row * range + j] = rows[node.nbrs[j]];
+      }
+    }
+    ::close(fd);
+    std::free(buf);
+    // [3]
+    std::ofstream out(path, std::ios::binary);
+    const uint32_t head[2] = {(uint32_t) total, (uint32_t) range};
+    out.write((const char *) head, sizeof(head));
+    out.write((const char *) degrees.data(), total * sizeof(uint32_t));
+    uint64_t kept = 0;
+    for (uint64_t row = 0; row < total; row++) {
+      out.write((const char *) (edges.data() + row * range), degrees[row] * sizeof(uint32_t));
+      kept += degrees[row];
+    }
+    LOG(INFO) << "dumpgraph: " << total << " nodes, " << kept << " edges to " << path;
   }
 
   template class SSDIndex<float>;
