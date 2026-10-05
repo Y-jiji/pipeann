@@ -140,6 +140,14 @@ namespace pipeann {
       LOG(INFO) << "Compressed data written in: " << std::chrono::duration<double>(end - start).count() << "s.";
     }
 
+    /**
+     * @brief Encode every point of a bin file by the pivots at {index_prefix}_pq_pivots.bin
+     * @param index_prefix prefix of the pivots read and of the codes written as _pq_compressed.bin
+     * @param data_bin bin file of the points, u32 npts and dim ahead of the coords
+     * @param chunks PQ chunks, the code bytes per point the pivots were trained for
+     */
+    void encode(const std::string &index_prefix, const std::string &data_bin, uint32_t chunks);
+
     /* Encode point as PQ code and store at data[loc * n_chunks]; resize data if needed \
      * `point`: raw vector of dimension pq_table.ndims \
      * `loc`: node location; used as the index into the global code table \
@@ -450,4 +458,18 @@ namespace pipeann {
       return 0;
     }
   };
+
+  template<typename T>
+  void PQNeighbor<T>::encode(const std::string &index_prefix, const std::string &data_bin,
+                             uint32_t chunks) {
+    // [1]
+    const std::string pivots = index_prefix + "_pq_pivots.bin";
+    const std::string codes = index_prefix + "_pq_compressed.bin";
+    // [2]
+    if (generate_pq_data_from_pivots(data_bin, 256, chunks, pivots, codes, 0) != 0) {
+      LOG(ERROR) << "encode: cannot encode " << data_bin << " by " << pivots;
+      exit(-1);
+    }
+    LOG(INFO) << "encode: " << data_bin << " by " << pivots << " to " << codes;
+  }
 }  // namespace pipeann
