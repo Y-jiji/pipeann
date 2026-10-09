@@ -4,12 +4,9 @@
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
+#include <limits>
 #include <omp.h>
 #include <shared_mutex>
-#include <linux/futex.h>
-#include <sys/syscall.h>
-#include <unistd.h>
 #include "utils/libcuckoo/cuckoohash_map.hh"
 #include "utils/log.h"
 
@@ -21,246 +18,140 @@ inline void thread_pause() {
 }
 
 namespace pipeann {
-  /** @brief Read-only polls of a taken latch before a waiter sleeps on it */
-  constexpr int LATCH_SPINS = 256;
-
-  /**
-   * @brief Reader-writer latch with no owner, so any thread may release it, as the background IO
-   *        thread releases the page locks insert threads took; state is 0 when free, -1 when
-   *        write-held and n > 0 when read-held by n, sleep counts the threads asleep on state
-   */
-  struct SparseLatch {
-    std::atomic<int32_t> state{0};
-    std::atomic<int32_t> sleep{0};
-
-    /**
-     * @brief Take a read hold unless the latch is write-held
-     * @return whether the hold was taken
-     */
-    bool tryrd();
-
-    /**
-     * @brief Take the write hold if the latch is free
-     * @return whether the hold was taken
-     */
-    bool trywr();
-
-    /** @brief Take a read hold, waiting while the latch is write-held */
-    void rd();
-
-    /** @brief Take the write hold, waiting while the latch is held */
-    void wr();
-
-    /**
-     * @brief Return once the latch looked takeable, after a read-only spin or a futex sleep
-     * @param reader whether a read hold is wanted
-     */
-    void wait(bool reader);
-
-    /** @brief Drop one hold, the write hold or a read hold, and wake the sleepers if any */
-    void release();
-  };
-
-  inline bool SparseLatch::tryrd() {
-    int32_t s = state.load(std::memory_order_relaxed);
-    while (s >= 0) {
-      if (state.compare_exchange_weak(s, s + 1, std::memory_order_acquire, std::memory_order_relaxed)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  inline bool SparseLatch::trywr() {
-    int32_t s = 0;
-    return state.compare_exchange_strong(s, -1, std::memory_order_acquire, std::memory_order_relaxed);
-  }
-
-  inline void SparseLatch::rd() {
-    while (!tryrd()) {
-      wait(true);
-    }
-  }
-
-  inline void SparseLatch::wr() {
-    while (!trywr()) {
-      wait(false);
-    }
-  }
-
-  inline void SparseLatch::wait(bool reader) {
-    // [1]
-    const auto open = [reader](int32_t s) { return reader ? s >= 0 : s == 0; };
-    for (int spin = 0; spin < LATCH_SPINS; ++spin) {
-      if (open(state.load(std::memory_order_relaxed))) {
-        return;
-      }
-      thread_pause();
-    }
-    // [2]
-    sleep.fetch_add(1, std::memory_order_seq_cst);
-    const int32_t s = state.load(std::memory_order_seq_cst);
-    if (!open(s)) {
-      syscall(SYS_futex, reinterpret_cast<int32_t *>(&state), FUTEX_WAIT_PRIVATE, s, nullptr, nullptr, 0);
-    }
-    sleep.fetch_sub(1, std::memory_order_relaxed);
-  }
-
-  inline void SparseLatch::release() {
-    if (state.load(std::memory_order_relaxed) == -1) {
-      state.store(0, std::memory_order_seq_cst);
-    } else {
-      state.fetch_sub(1, std::memory_order_seq_cst);
-    }
-    if (sleep.load(std::memory_order_seq_cst) > 0) {
-      syscall(SYS_futex, reinterpret_cast<int32_t *>(&state), FUTEX_WAKE_PRIVATE, INT32_MAX, nullptr, nullptr,
-              0);
-    }
-  }
-
-  /**
-   * @brief A lock per key, made on the key's first use and erased once no thread holds or waits on
-   *        it; a thread counts itself on the key's entry with one map update, then waits on the
-   *        entry's latch outside the map, so no retry loop holds the map's bucket spinlocks against
-   *        the release of the key it waits for
-   * @tparam KEY key type
-   * @tparam HASH hash of a key
-   */
-  template<class KEY, class HASH = std::hash<KEY>>
-  class SparseLockTable {
+  // No thread ownership: page locks are acquired by insert threads and released by background IO.
+  // Waiting only polls the state until acquisition looks possible; there is no fairness guarantee.
+  class RWSpinLock {
    public:
-    /** @brief An empty table */
-    SparseLockTable();
+    int tryrdlock() {
+      int state = state_.load(std::memory_order_relaxed);
+      while (state >= 0 && state < std::numeric_limits<int>::max()) {
+        if (state_.compare_exchange_weak(state, state + 1, std::memory_order_acquire,
+                                        std::memory_order_relaxed)) {
+          return 0;
+        }
+      }
+      return EBUSY;
+    }
 
-    /**
-     * @brief Take a read hold on key unless it is write-held
-     * @param key the key
-     * @return 0 when taken, EBUSY when not
-     */
-    int tryrdlock(const KEY &key);
+    int trywrlock() {
+      int state = state_.load(std::memory_order_relaxed);
+      return state == 0 && state_.compare_exchange_strong(state, -1, std::memory_order_acquire,
+                                                        std::memory_order_relaxed)
+                 ? 0
+                 : EBUSY;
+    }
 
-    /**
-     * @brief Take the write hold on key if nobody holds it
-     * @param key the key
-     * @return 0 when taken, EBUSY when not
-     */
-    int trywrlock(const KEY &key);
+    void rdlock() {
+      while (tryrdlock() != 0) {
+        while (state_.load(std::memory_order_relaxed) == -1) {
+          thread_pause();
+        }
+      }
+    }
 
-    /**
-     * @brief Take a read hold on key, waiting on its latch while it is write-held
-     * @param key the key
-     */
-    void rdlock(const KEY &key);
+    void wrlock() {
+      while (trywrlock() != 0) {
+        while (state_.load(std::memory_order_relaxed) != 0) {
+          thread_pause();
+        }
+      }
+    }
 
-    /**
-     * @brief Take the write hold on key, waiting on its latch while it is held
-     * @param key the key
-     */
-    void wrlock(const KEY &key);
-
-    /**
-     * @brief Drop a hold on key, from any thread
-     * @param key the key
-     */
-    void unlock(const KEY &key);
-
-    /**
-     * @brief Keys held or waited on
-     * @return the number of entries
-     */
-    size_t size();
+    void unlock() {
+      if (state_.load(std::memory_order_relaxed) == -1) {
+        state_.store(0, std::memory_order_release);
+      } else {
+        state_.fetch_sub(1, std::memory_order_release);
+      }
+    }
 
    private:
-    /**
-     * @brief Count one more holder or waiter on the key's entry, making the entry if absent
-     * @param key the key
-     * @return the entry's latch
-     */
-    SparseLatch *pin(const KEY &key);
-
-    /**
-     * @brief Count one less holder or waiter on the key's entry, erasing it once unused
-     * @param key the key
-     * @param held whether to drop a hold on the entry's latch first
-     */
-    void unpin(const KEY &key, bool held);
-
-    libcuckoo::cuckoohash_map<KEY, std::pair<SparseLatch *, int>, HASH> *table;
+    // 0: free, -1: write-held, positive: number of readers.
+    std::atomic<int> state_{0};
   };
 
-  template<class KEY, class HASH>
-  SparseLockTable<KEY, HASH>::SparseLockTable()
-      : table(new libcuckoo::cuckoohash_map<KEY, std::pair<SparseLatch *, int>, HASH>()) {
-  }
-
-  template<class KEY, class HASH>
-  int SparseLockTable<KEY, HASH>::tryrdlock(const KEY &key) {
-    if (pin(key)->tryrd()) {
-      return 0;
+  template<class K, class HashFunction = std::hash<K>>
+  class SparseLockTable {
+   public:
+    SparseLockTable() {
+      locks_ = new libcuckoo::cuckoohash_map<K, std::pair<RWSpinLock *, int>, HashFunction>();
     }
-    unpin(key, false);
-    return EBUSY;
-  }
 
-  template<class KEY, class HASH>
-  int SparseLockTable<KEY, HASH>::trywrlock(const KEY &key) {
-    if (pin(key)->trywr()) {
-      return 0;
+    int tryrdlock(const K &key) {
+      int ret = 0;
+      locks_->upsert(key, [&](std::pair<RWSpinLock *, int> &v, libcuckoo::UpsertContext ctx) {
+        if (ctx == libcuckoo::UpsertContext::NEWLY_INSERTED) {
+          v = std::make_pair(new RWSpinLock, 0);
+        }
+        ret = v.first->tryrdlock();
+        if (ret == 0) {
+          v.second++;
+        }
+      });
+      return ret;
     }
-    unpin(key, false);
-    return EBUSY;
-  }
 
-  template<class KEY, class HASH>
-  void SparseLockTable<KEY, HASH>::rdlock(const KEY &key) {
-    pin(key)->rd();
-  }
+    int trywrlock(const K &key) {
+      int ret = 0;
+      locks_->upsert(key, [&](std::pair<RWSpinLock *, int> &v, libcuckoo::UpsertContext ctx) {
+        if (ctx == libcuckoo::UpsertContext::NEWLY_INSERTED) {
+          v = std::make_pair(new RWSpinLock, 0);
+        }
+        ret = v.first->trywrlock();
+        if (ret == 0) {
+          v.second++;
+        }
+      });
+      return ret;
+    }
 
-  template<class KEY, class HASH>
-  void SparseLockTable<KEY, HASH>::wrlock(const KEY &key) {
-    pin(key)->wr();
-  }
+    void rdlock(const K &key) {
+      lock(key, false);
+    }
 
-  template<class KEY, class HASH>
-  void SparseLockTable<KEY, HASH>::unlock(const KEY &key) {
-    unpin(key, true);
-  }
+    void wrlock(const K &key) {
+      lock(key, true);
+    }
 
-  template<class KEY, class HASH>
-  size_t SparseLockTable<KEY, HASH>::size() {
-    return table->size();
-  }
+    inline void unlock(const K &key) {
+      locks_->erase_fn(key, [&](std::pair<RWSpinLock *, int> &v) {
+        if (v.second == 0) {
+          LOG(ERROR) << "SparseLockTable: unlock a non-locked key: " << key;
+          __builtin_trap();
+        }
+        v.first->unlock();
 
-  template<class KEY, class HASH>
-  SparseLatch *SparseLockTable<KEY, HASH>::pin(const KEY &key) {
-    SparseLatch *latch = nullptr;
-    table->upsert(key, [&](std::pair<SparseLatch *, int> &entry, libcuckoo::UpsertContext ctx) {
-      if (ctx == libcuckoo::UpsertContext::NEWLY_INSERTED) {
-        entry = std::make_pair(new SparseLatch, 0);
-      }
-      entry.second++;
-      latch = entry.first;
-    });
-    return latch;
-  }
+        if (v.second == 1) {
+          delete v.first;
+        }
+        v.second--;
+        return v.second == 0;
+      });
+    }
 
-  template<class KEY, class HASH>
-  void SparseLockTable<KEY, HASH>::unpin(const KEY &key, bool held) {
-    table->erase_fn(key, [&](std::pair<SparseLatch *, int> &entry) {
-      if (entry.second == 0) {
-        LOG(ERROR) << "SparseLockTable: unlock a non-locked key: " << key;
-        __builtin_trap();
-      }
-      if (held) {
-        entry.first->release();
-      }
-      entry.second--;
-      if (entry.second == 0) {
-        delete entry.first;
-      }
-      return entry.second == 0;
-    });
-  }
+    size_t size() {
+      return locks_->size();
+    }
+
+   private:
+    void lock(const K &key, bool write) {
+      RWSpinLock *rwlock = nullptr;
+      locks_->upsert(key, [&](std::pair<RWSpinLock *, int> &v, libcuckoo::UpsertContext ctx) {
+        if (ctx == libcuckoo::UpsertContext::NEWLY_INSERTED) {
+          v = std::make_pair(new RWSpinLock, 0);
+        }
+        // Pin the lock before leaving the map, including while waiting to acquire it.
+        ++v.second;
+        rwlock = v.first;
+      });
+
+      // Never block under the bucket lock: unlock() needs that same bucket.
+      write ? rwlock->wrlock() : rwlock->rdlock();
+    }
+
+    // The count includes both holders and waiters; all updates are protected by the map.
+    libcuckoo::cuckoohash_map<K, std::pair<RWSpinLock *, int>, HashFunction> *locks_;
+  };
 
   template<class K, class HashFunction = std::hash<K>>
   class SparseReadLockGuard {
