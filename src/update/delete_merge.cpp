@@ -179,10 +179,12 @@ namespace pipeann {
         DiskNode<T> node = node_from_page(page_rbuf, loc);
         // prune neighbors.
         std::unordered_set<uint32_t> nhood_set;
+        bool touched = false;  // halfprune: a node with a deleted neighbor is always re-pruned to R / 2.
         for (uint32_t i = 0; i < node.nnbrs; ++i) {
           uint32_t nbr_tag = id2tag(node.nbrs[i]);
           if (deleted_nodes_set.find(nbr_tag) != deleted_nodes_set.end()) {
             // deleted, insert neighbors.
+            touched = true;
             const auto &nhoods = deleted_nhoods.find(node.nbrs[i]);
             nhood_set.insert(nhoods.begin(), nhoods.end());
           } else {
@@ -193,7 +195,9 @@ namespace pipeann {
         nhood_set.erase(id);  // remove self.
         std::vector<uint32_t> nhood(nhood_set.begin(), nhood_set.end());
 
-        if (nhood.size() > this->params.R) {
+        if (this->params.halfprune ? touched : nhood.size() > this->params.R) {
+          IndexBuildParameters half = this->params;
+          half.R = this->params.halfprune ? this->params.R / 2 : this->params.R;
           std::vector<float> dists(nhood.size(), 0.0f);
           std::vector<Neighbor> pool(nhood.size());
           // Use dynamic buffer instead of pre-initialized buffer to save space.
@@ -206,7 +210,7 @@ namespace pipeann {
             pool[k].distance = dists[k];
           }
           auto nbr = this->nbr_handler;
-          pipeann::prune_neighbors(pool, nhood, params, metric, [nbr, pq_buf](uint32_t a, uint32_t b) {
+          pipeann::prune_neighbors(pool, nhood, half, metric, [nbr, pq_buf](uint32_t a, uint32_t b) {
             float dist;
             nbr->compute_dists(a, &b, 1, &dist, pq_buf);
             return dist;

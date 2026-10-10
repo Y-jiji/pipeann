@@ -358,6 +358,7 @@ namespace pipeann {
     // By default, we assume a maximum parallelism of 128.
     uint32_t max_nthreads = 128;            // max threads for SSD I/O buffer allocation.
     uint32_t sampled_nbrs_for_delete = 20;  // neighbors sampled during merge.
+    bool halfprune = false;  // every prune keeps R / 2: new node, full neighbor, any merged node with a deleted nbr.
 
     void set(uint32_t R, uint32_t L, uint32_t C, float alpha = 1.2, uint32_t num_threads = 0,
              bool saturate_graph = true, uint32_t beam_width = 8) {

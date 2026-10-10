@@ -41,7 +41,9 @@ namespace pipeann {
     InsertContext insert_ctx(kExpandedNodesFactor * this->params.L, this->aligned_dim);
     this->do_pipe_search(point1, 0, params.L, params.beam_width, exp_node_info, stats, &insert_ctx);
     std::vector<uint32_t> new_nhood;
-    pipeann::prune_neighbors(exp_node_info, new_nhood, params, metric, [this, &insert_ctx](uint32_t a, uint32_t b) {
+    IndexBuildParameters half = params;  // halfprune: prunes keep R / 2.
+    half.R = params.halfprune ? params.R / 2 : params.R;
+    pipeann::prune_neighbors(exp_node_info, new_nhood, half, metric, [this, &insert_ctx](uint32_t a, uint32_t b) {
       return this->dist_cmp->compare(insert_ctx.coord_map[a], insert_ctx.coord_map[b], this->meta_.data_dim);
     });
     // locs[new_nhood.size()] is the target, locs[0:new_nhood.size() - 1] are the neighbors.
@@ -185,7 +187,22 @@ namespace pipeann {
       nhood.assign(r_nbr_node.nbrs, r_nbr_node.nbrs + r_nbr_node.nnbrs);
       nhood.emplace_back(target_id);  // attention: we do not reuse IDs.
 
-      if (nhood.size() > this->params.R) {  // delta prune neighbors
+      if (nhood.size() > this->params.R && this->params.halfprune) {  // re-prune the full list to R / 2
+        auto &thread_pq_buf = read_data->nbr_vec_scratch;
+        auto nbr = this->nbr_handler;
+        std::vector<float> dists(nhood.size(), 0.0f);
+        nbr->compute_dists(new_nhood[i], nhood.data(), nhood.size(), dists.data(), thread_pq_buf);
+        std::vector<Neighbor> pool(nhood.size());
+        for (uint32_t k = 0; k < nhood.size(); k++) {
+          pool[k].id = nhood[k];
+          pool[k].distance = dists[k];
+        }
+        pipeann::prune_neighbors(pool, nhood, half, metric, [nbr, &thread_pq_buf](uint32_t a, uint32_t b) {
+          float dist;
+          nbr->compute_dists(a, &b, 1, &dist, thread_pq_buf);
+          return dist;
+        });
+      } else if (nhood.size() > this->params.R) {  // delta prune neighbors
         auto &thread_pq_buf = read_data->nbr_vec_scratch;
         auto nbr = this->nbr_handler;
         bool evicted_existing = pipeann::delta_prune_neighbors(
