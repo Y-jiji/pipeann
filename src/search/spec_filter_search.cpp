@@ -24,6 +24,7 @@ namespace pipeann {
   size_t SSDIndex<T, TagT>::spec_filter_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                                Selector *base_selector, const Attributes &query_attrs, TagT *res_tags,
                                                float *res_dists, const uint64_t beam_width, QueryStats *stats) {
+    std::shared_lock lk(merge_lock);
     // In-filter state lives on the selector itself, so each query needs its
     // own cloned selector tree.
     Selector *selector = base_selector->copy();
