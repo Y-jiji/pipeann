@@ -208,6 +208,8 @@ namespace pipeann {
       }
     };
     std::queue<io_t> on_flight_ios;
+    std::unordered_map<unsigned, DiskNode<T>> id_buf_map;
+    std::vector<int64_t> slot_owner(MAX_N_SECTOR_READS, -1);
 
     auto send_read_req = [&](Neighbor &item) -> bool {
       PTRACE_REF("I %u", item.id);
@@ -216,6 +218,15 @@ namespace pipeann {
       const unsigned loc = id2loc(item.id), pid = loc_sector_no(loc);
 
       uint64_t &cur_buf_idx = query_buf->sector_idx;
+      const int64_t owner = slot_owner[cur_buf_idx];
+      if (owner >= 0 && id_buf_map.erase((unsigned) owner) != 0) {
+        for (unsigned i = 0; i < cur_list_size; ++i) {
+          if (retset[i].id == (unsigned) owner && !retset[i].visited) {
+            retset[i].flag = true;
+          }
+        }
+      }
+      slot_owner[cur_buf_idx] = item.id;
       auto buf = sector_scratch + cur_buf_idx * read_io_size;
       auto &req = query_buf->reqs[cur_buf_idx];
       req = IORequest(static_cast<uint64_t>(pid) * SECTOR_LEN, read_io_size, buf, u_loc_offset(loc), meta_.max_node_len,
@@ -231,7 +242,6 @@ namespace pipeann {
       return true;
     };
 
-    std::unordered_map<unsigned, DiskNode<T>> id_buf_map;
     auto poll_all = [&]() -> std::pair<int, int> {
       if (insert_ctx != nullptr) {
         reader->poll_alloc(ctx, &insert_ctx->page_ref);
