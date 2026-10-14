@@ -239,6 +239,35 @@ namespace pipeann {
      */
     void dumpgraph(const std::string &path);
 
+    /**
+     * @brief Start CONDA over the loaded graph: every loaded id live and stored, tag i at its id
+     * @param base bin file of the loaded points, read once for CONDA's dead test on point[0]
+     * @param capacity bound on every id and tag the run will hold
+     * @param entry CONDA's entry point
+     */
+    void condaload(const std::string &base, uint64_t capacity, uint32_t entry);
+
+    /**
+     * @brief Open an insert batch: its first insert runs alone and non-lazy when no deleted vertex
+     *  awaits consolidation, as CONDA's BatchInsert_crng
+     */
+    void condabatch();
+
+    /**
+     * @brief CONDA's delete step: MarkDelete of every tag in order, the repair of each deleted vertex,
+     *  then their consolidation into tombstones on the free stack
+     * @param tags the deleted tags, in MarkDelete order
+     * @param nthreads repair and consolidation threads
+     */
+    void condadelete(const std::vector<TagT> &tags, uint32_t nthreads);
+
+    /**
+     * @brief The current neighbor list of an id, empty when never stored
+     * @param id the vertex
+     * @return its out-neighbors in stored order
+     */
+    std::vector<uint32_t> condaedges(uint32_t id);
+
     // Merge deletes (NOTE: index read-only during merge.)
     // Returns id_map: old_id -> new_id.
     libcuckoo::cuckoohash_map<uint32_t, uint32_t> merge_deletes(const std::string &in_path_prefix,
@@ -276,6 +305,28 @@ namespace pipeann {
       uint64_t *close = nullptr;
       uint64_t begun = 0;
       bool terminate = false;
+    };
+
+    /** @brief Seeding of a CONDA walk: non-lazy insert, lazy insert, or repair of a deleted vertex */
+    enum class CondaSeek { FULL, LAZY, HEAL };
+
+    /** @brief One CONDA store primitive on a list: token 'S' set, 'A' add, 'D' delete every copy,
+     *  'C' clear, or 'V' the vector written into the op */
+    struct CondaEdit {
+      uint8_t token;
+      uint32_t entry;
+      std::vector<uint32_t> whole;
+    };
+
+    /** @brief One CONDA operation's view: lists and vectors it read or wrote, each record's edits
+     *  in order, the records it dirtied, pages it read near, and page refs to drop at its end */
+    struct CondaOp {
+      tsl::robin_map<uint32_t, std::vector<uint32_t>> lists;
+      tsl::robin_map<uint32_t, std::vector<T>> point;
+      tsl::robin_map<uint32_t, std::vector<CondaEdit>> edits;
+      std::vector<uint32_t> dirty;
+      std::vector<uint64_t> hints;
+      std::vector<uint64_t> pages;
     };
 
     using PageArr = std::vector<uint32_t>;
@@ -336,6 +387,27 @@ namespace pipeann {
     bool load_flag = false;    // already loaded.
     bool enable_tags = false;  // support for tags and dynamic indexing
 
+    /** @brief CONDA's deleted set: ids marked deleted and not yet consolidated */
+    tsl::robin_set<uint32_t> condagone;
+    /** @brief CONDA's free stack of tombstoned ids, reused last in first out */
+    std::vector<uint32_t> condafree;
+    /** @brief CONDA's tag to id map */
+    libcuckoo::cuckoohash_map<TagT, uint32_t> condaloc;
+    /** @brief Per id: 0 live, 1 live with point[0] at the type's max, 2 tombstone */
+    std::vector<uint8_t> condahead;
+    /** @brief Per id: holds a live tag, CONDA's location_to_tag_ */
+    std::vector<uint8_t> condalive;
+    /** @brief Per id: has a record on disk */
+    std::vector<uint8_t> stored;
+    /** @brief CONDA's entry point */
+    uint32_t condaep = 0;
+    /** @brief CONDA's tag_lock_: id reservation and the tag maps */
+    std::mutex condamu;
+    /** @brief Held alone by a batch's first insert, shared by the rest */
+    std::shared_mutex condagate;
+    /** @brief 1 while a batch's first insert is due, 2 while it runs, else 0 */
+    std::atomic<int> condafresh{0};
+
     void init_buffers(uint64_t nthreads);
     void destroy_buffers();
 
@@ -380,7 +452,152 @@ namespace pipeann {
                             uint64_t read_io_size, bool use_dense_nbrs, SpecFn is_member_approx, VerifyFn is_member,
                             std::vector<Neighbor> &full_retset, QueryStats *stats = nullptr,
                             InsertContext *insert_ctx = nullptr,
-                            float range_partial = std::numeric_limits<float>::infinity());
+                            float range_partial = std::numeric_limits<float>::infinity(),
+                            const std::vector<uint32_t> *seeds = nullptr);
+
+    /**
+     * @brief CONDA's dead test, point[0] at the type's max: tombstones and live points that start so
+     * @param id the vertex
+     * @return whether CONDA's lazy walk treats it as deleted
+     */
+    bool condadead(uint32_t id);
+
+    /**
+     * @brief CONDA's reserve_location, the caller holding condamu
+     * @return the top of the free stack, else the next new id
+     */
+    uint32_t condareserve();
+
+    /**
+     * @brief CONDA's Insert_crng under BatchInsert_crng's first-insert rule
+     * @param point the vector
+     * @param tag its tag
+     * @param stats walk counters, may be null
+     * @param pages pages written, may be null
+     * @param close nanoseconds from begun to the write's end, may be null
+     * @param begun steady clock at the insert's start
+     * @return the id it took
+     */
+    int condainsert(const T *point, const TagT &tag, QueryStats *stats, uint64_t *pages, uint64_t *close,
+                    uint64_t begun);
+
+    /**
+     * @brief CONDA's Process_crng: relink a deleted vertex's in-neighbors and out-neighbors; SHAME(TALLFUNC)
+     * @param id the deleted vertex
+     */
+    void condarepair(uint32_t id);
+
+    /**
+     * @brief CONDA's consolidation of one deleted vertex: empty list, max vector
+     * @param id the deleted vertex
+     */
+    void condaclear(uint32_t id);
+
+    /**
+     * @brief CONDA's greedy walk, seeded and with its lazy rule, run by the pipelined search;
+     *  SHAME(TALLFUNC)
+     * @param self the inserted or deleted vertex, never walked through
+     * @param seek seeding and laziness
+     * @param listn candidate list
+     * @param op the operation, its vector at self
+     * @param expanded every expanded vertex in expansion order, at CONDA's distance to self
+     * @param stats walk counters, may be null
+     */
+    void condasearch(uint32_t self, CondaSeek seek, uint32_t listn, CondaOp &op, std::vector<Neighbor> &expanded,
+                     QueryStats *stats);
+
+    /**
+     * @brief CONDA's get_distance between two vertices
+     * @param first one vertex
+     * @param second the other
+     * @param op the operation, exact from its vectors when it read both outside the idealized mode
+     * @return squared L2
+     */
+    float condadist(uint32_t first, uint32_t second, CondaOp &op);
+
+    /**
+     * @brief CONDA's GetNeighbors in the operation's view, read once from disk
+     * @param id the vertex
+     * @param op the operation
+     * @return its list, valid until the op next gains a list
+     */
+    const std::vector<uint32_t> &condaget(uint32_t id, CondaOp &op);
+
+    /**
+     * @brief Read the records of ids the op has not seen, a chunk of reads at a time
+     * @param ids the vertices
+     * @param op the operation
+     */
+    void condafetch(const std::vector<uint32_t> &ids, CondaOp &op);
+
+    /**
+     * @brief Apply one store primitive to the op's view and log it for the write
+     * @param id the vertex
+     * @param edit the primitive
+     * @param op the operation
+     */
+    void condaedit(uint32_t id, CondaEdit edit, CondaOp &op);
+
+    /**
+     * @brief Insert_crng's CRNG choice over the sorted walk, rewiring each occluder to self
+     * @param self the inserted vertex
+     * @param expanded the walk sorted by distance
+     * @param op the operation
+     * @param pruned per candidate its occluder, or UINT_MAX
+     * @param result the chosen neighbors
+     * @return the index of the last chosen candidate
+     */
+    uint32_t condaselect(uint32_t self, const std::vector<Neighbor> &expanded, CondaOp &op,
+                         std::vector<uint32_t> &pruned, std::vector<uint32_t> &result);
+
+    /**
+     * @brief InterInsert_with_expand: back edges to self, occluded candidates retried when one is refused
+     * @param self the inserted vertex
+     * @param expanded the walk sorted by distance
+     * @param pruned per candidate its occluder, or UINT_MAX
+     * @param maxid the index of the last chosen candidate
+     * @param op the operation
+     */
+    void condalink(uint32_t self, const std::vector<Neighbor> &expanded, std::vector<uint32_t> &pruned,
+                   uint32_t maxid, CondaOp &op);
+
+    /**
+     * @brief CONDA's alpha-RNG prune that reports whether self survived
+     * @param center the list's owner
+     * @param pool candidates at their distance to center
+     * @param self the vertex whose survival is reported
+     * @param result the kept ids
+     * @param op the operation
+     * @return whether self was kept
+     */
+    bool condaalpha(uint32_t center, std::vector<Neighbor> &pool, uint32_t self, std::vector<uint32_t> &result,
+                    CondaOp &op);
+
+    /**
+     * @brief CONDA's sync_prune_crng, deleting each non-monotonic two-hop edge it keeps around
+     * @param center the list's owner
+     * @param pool candidates at their distance to center
+     * @param result the kept ids
+     * @param op the operation
+     */
+    void condacrng(uint32_t center, std::vector<Neighbor> &pool, std::vector<uint32_t> &result, CondaOp &op);
+
+    /**
+     * @brief The CONDA_LINKS pool members closest to self, self excluded
+     * @param pool candidate ids
+     * @param self the vertex
+     * @param op the operation
+     * @return up to CONDA_LINKS ids, closest first
+     */
+    std::vector<uint32_t> condaclose(const std::vector<uint32_t> &pool, uint32_t self, CondaOp &op);
+
+    /**
+     * @brief Write the op's dirty records relocated onto shared pages, each re-read under its lock
+     *  and its edits replayed on it; SHAME(TALLFUNC)
+     * @param op the operation
+     * @return pages written
+     */
+    uint64_t condaflush(CondaOp &op);
 
     // Background I/O thread function.
     void bg_io_thread();

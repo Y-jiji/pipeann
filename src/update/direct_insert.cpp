@@ -28,6 +28,9 @@ namespace pipeann {
   template<typename T, typename TagT>
   int SSDIndex<T, TagT>::insert_in_place(const T *point1, const TagT &tag, const Attributes *attrs, QueryStats *stats,
                                          uint64_t *pages, uint64_t *close, uint64_t begun) {
+    if (params.conda != 0) {
+      return this->condainsert(point1, tag, stats, pages, close, begun);
+    }
     QueryBuffer *read_data = this->pop_query_buf(point1);
     T *point = read_data->aligned_query<T>();  // normalized point for cosine.
     void *ctx = reader->get_ctx(); // initialize ctx here, avoid SQ polling for insert.

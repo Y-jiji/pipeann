@@ -28,7 +28,8 @@ namespace pipeann {
                                              uint64_t beam_width, uint64_t read_io_size, bool use_dense_nbrs,
                                              SpecFn is_member_approx, VerifyFn is_member,
                                              std::vector<Neighbor> &full_retset, QueryStats *stats,
-                                             InsertContext *insert_ctx, float range_partial) {
+                                             InsertContext *insert_ctx, float range_partial,
+                                             const std::vector<uint32_t> *seeds) {
     QueryBuffer *query_buf = pop_query_buf(query1);
     // A search thread spin-polls its own completions (poll_all), so an
     // SQPOLL kernel thread doubles the cores one search thread needs.
@@ -169,7 +170,17 @@ namespace pipeann {
     std::vector<unsigned> mem_tags(mem_L);
     std::vector<float> mem_dists(mem_L);
 
-    if (mem_L) {
+    if (seeds != nullptr) {
+      nbr_handler->initialize_query(query, query_buf);
+      const uint64_t n_seeds = std::min<uint64_t>({seeds->size(), MAX_N_EDGES, retset.size()});
+      nbr_handler->compute_dists(query_buf, seeds->data(), n_seeds);
+      for (uint64_t i = 0; i < n_seeds; ++i) {
+        retset[cur_list_size++] = Neighbor((*seeds)[i], dist_scratch[i], true);
+        visited.insert((*seeds)[i]);
+      }
+      std::sort(retset.begin(), retset.begin() + cur_list_size);
+      cur_list_size = std::min<uint64_t>(cur_list_size, l_pool);
+    } else if (mem_L) {
       mem_index_->search_with_tags_fast(query, mem_L, mem_tags.data(), mem_dists.data());
       add_to_retset(mem_tags.data(), std::min<uint64_t>(mem_L, l_pool), mem_dists.data());
     } else {
@@ -261,9 +272,13 @@ namespace pipeann {
     };
 
     // --- Node selection ---
+    const bool strict = this->params.conda == 2;
     auto calc_best_node = [&]() -> int {
       unsigned marker = 0, nk = cur_list_size, first_unvisited_eager = cur_list_size;
       for (marker = 0; marker < cur_list_size; ++marker) {
+        if (strict && !retset[marker].visited && id_buf_map.find(retset[marker].id) == id_buf_map.end()) {
+          break;
+        }
         if (!retset[marker].visited && id_buf_map.find(retset[marker].id) != id_buf_map.end()) {
           PTRACE_IN("X %u %u", retset[marker].id, marker);
           retset[marker].flag = false;

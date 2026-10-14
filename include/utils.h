@@ -358,6 +358,10 @@ namespace pipeann {
     // By default, we assume a maximum parallelism of 128.
     uint32_t max_nthreads = 128;            // max threads for SSD I/O buffer allocation.
     uint32_t sampled_nbrs_for_delete = 20;  // neighbors sampled during merge.
+    /** @brief CONDA's insert and delete repair in place of OdinANN's: 0 off, 1 on, 2 on with every
+     *  distance from the neighbor handler and strictly best-first walks, the idealized mode a
+     *  differential test compares against CONDA's own code */
+    uint32_t conda = 0;
 
     void set(uint32_t R, uint32_t L, uint32_t C, float alpha = 1.2, uint32_t num_threads = 0,
              bool saturate_graph = true, uint32_t beam_width = 8) {
@@ -381,7 +385,7 @@ namespace pipeann {
                 << " R: " << (R == 0 ? "auto" : std::to_string(R)) << " C: " << C << " alpha: " << alpha
                 << " num_threads: " << (num_threads == 0 ? "auto" : std::to_string(num_threads))
                 << " beam_width: " << beam_width << " saturate_graph: " << saturate_graph
-                << " max_nthreads: " << max_nthreads;
+                << " max_nthreads: " << max_nthreads << " conda: " << conda;
       if (use_pipnn) {
         pipnn_config.print();
       }

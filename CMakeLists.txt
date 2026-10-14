@@ -196,3 +196,18 @@ if(DEFINED DELDIR)
 	target_include_directories(odindel PRIVATE "${EVALDIR}")
 	target_link_libraries(odindel ${PROJECT_NAME})
 endif()
+
+# The CONDA port against condaann's own in-memory CONDA: the reference is compiled
+# from ${CONDADIR} into its own library, its headers first, so they never meet ours.
+if(DEFINED CONDADIR)
+	enable_testing()
+	add_library(condaref STATIC unittest/condaref.cc "${CONDADIR}/src/index.cpp"
+		"${CONDADIR}/src/conda_internals.cpp" "${CONDADIR}/src/dynamic_index.cpp"
+		"${CONDADIR}/src/natural_number_map.cpp" "${CONDADIR}/src/natural_number_set.cpp"
+		"${CONDADIR}/src/ann_exception.cpp")
+	target_include_directories(condaref BEFORE PRIVATE "${CONDADIR}/include")
+	add_executable(test_conda unittest/test_conda.cc)
+	target_compile_definitions(test_conda PRIVATE CONDA_DISTANCE="${CONDADIR}/include/distance.h")
+	target_link_libraries(test_conda condaref ${PROJECT_NAME})
+	add_test(NAME conda COMMAND test_conda)
+endif()
