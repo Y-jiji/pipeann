@@ -354,6 +354,7 @@ class DynamicIndex : public BaseDynamicIndex {
     }
 
     size_t pos = 0;
+    auto gone = std::shared_lock<std::shared_mutex>(deletemu);
     for (size_t j = 0; j < n_valid && pos < topk; j++) {
       if (this->deleted_nodes_set_.find(tags[j]) == this->deleted_nodes_set_.end()) {
         out_ids[pos] = tags[j];
@@ -437,9 +438,12 @@ class DynamicIndex : public BaseDynamicIndex {
   // Single-point lazy delete (marks tag for future merge).
   void lazy_delete(const TagT &tag) {
     auto mu = std::shared_lock<std::shared_mutex>(save_mu_);
-    if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
-      deleted_nodes_set_.insert(tag);
-      deleted_nodes_.push_back(tag);
+    {
+      auto gone = std::unique_lock<std::shared_mutex>(deletemu);
+      if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
+        deleted_nodes_set_.insert(tag);
+        deleted_nodes_.push_back(tag);
+      }
     }
     mem_index_->lazy_delete(tag);
   }
@@ -447,13 +451,18 @@ class DynamicIndex : public BaseDynamicIndex {
   // Bulk remove.
   void remove(const TagT *tags, uint32_t n_tags) {
     auto mu = std::shared_lock<std::shared_mutex>(save_mu_);
-    for (uint32_t i = 0; i < n_tags; i++) {
-      TagT tag = tags[i];
-      if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
-        deleted_nodes_set_.insert(tag);
-        deleted_nodes_.push_back(tag);
+    {
+      auto gone = std::unique_lock<std::shared_mutex>(deletemu);
+      for (uint32_t i = 0; i < n_tags; i++) {
+        TagT tag = tags[i];
+        if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
+          deleted_nodes_set_.insert(tag);
+          deleted_nodes_.push_back(tag);
+        }
       }
-      mem_index_->lazy_delete(tag);
+    }
+    for (uint32_t i = 0; i < n_tags; i++) {
+      mem_index_->lazy_delete(tags[i]);
     }
   }
 
@@ -495,6 +504,7 @@ class DynamicIndex : public BaseDynamicIndex {
       }
 
       cur_index_prefix_ = index_prefix;
+      auto gone = std::unique_lock<std::shared_mutex>(deletemu);
       deleted_nodes_.clear();
       deleted_nodes_set_.clear();
     }
@@ -554,6 +564,8 @@ class DynamicIndex : public BaseDynamicIndex {
   pipeann::Metric metric_;
   std::vector<TagT> deleted_nodes_;
   tsl::robin_set<TagT> deleted_nodes_set_;  // copy of deleted nodes.
+  std::shared_mutex deletemu;               // deleted_nodes_ and deleted_nodes_set_, written by lazy deletes and
+                                            // save, read by every search.
 
   // if vectors are less than the threshold, use mem index instead.
   std::mt19937 gen;
