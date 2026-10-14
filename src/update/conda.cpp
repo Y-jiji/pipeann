@@ -223,12 +223,20 @@ namespace pipeann {
       }
     }
     // [3]
-    static thread_local uint8_t *scratch = nullptr;
-    if (scratch == nullptr) {
-      pipeann::alloc_aligned((void **) &scratch, 4 * AbstractNeighbor<T>::MAX_BYTES_PER_NBR, 256);
+    // Freed at thread exit, as a bench starts fresh worker threads for every run.
+    static thread_local struct Scratch {
+      uint8_t *bytes = nullptr;
+      ~Scratch() {
+        if (bytes != nullptr) {
+          pipeann::aligned_free(bytes);
+        }
+      }
+    } scratch;
+    if (scratch.bytes == nullptr) {
+      pipeann::alloc_aligned((void **) &scratch.bytes, 4 * AbstractNeighbor<T>::MAX_BYTES_PER_NBR, 256);
     }
     float out = 0.0f;
-    nbr_handler->compute_dists(first, &second, 1, &out, scratch);
+    nbr_handler->compute_dists(first, &second, 1, &out, scratch.bytes);
     return out;
   }
 
