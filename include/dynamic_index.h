@@ -436,8 +436,14 @@ class DynamicIndex : public BaseDynamicIndex {
   }
 
   // Single-point lazy delete (marks tag for future merge).
+  // On a disk index it never waits for a save: the save merges a snapshot of the
+  // deletes, and those arriving meanwhile go to the next one, as deletes during a
+  // merge are handled in memory. A memory index, which save writes out, still waits.
   void lazy_delete(const TagT &tag) {
-    auto mu = std::shared_lock<std::shared_mutex>(save_mu_);
+    auto mu = std::shared_lock<std::shared_mutex>(save_mu_, std::defer_lock);
+    if (!use_disk_index_ || use_mem_index_for_disk_index_) {
+      mu.lock();
+    }
     {
       auto gone = std::lock_guard<std::mutex>(deletemu);
       if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
@@ -451,7 +457,10 @@ class DynamicIndex : public BaseDynamicIndex {
 
   // Bulk remove.
   void remove(const TagT *tags, uint32_t n_tags) {
-    auto mu = std::shared_lock<std::shared_mutex>(save_mu_);
+    auto mu = std::shared_lock<std::shared_mutex>(save_mu_, std::defer_lock);
+    if (!use_disk_index_ || use_mem_index_for_disk_index_) {
+      mu.lock();
+    }
     {
       auto gone = std::lock_guard<std::mutex>(deletemu);
       for (uint32_t i = 0; i < n_tags; i++) {
@@ -487,8 +496,16 @@ class DynamicIndex : public BaseDynamicIndex {
         LOG(INFO) << "Saving to the same index prefix. Using double-version: " << out_prefix;
       }
 
+      // The deletes this merge takes; later ones collect in the emptied sets.
+      std::vector<TagT> merged_nodes;
+      tsl::robin_set<TagT> merged_nodes_set;
+      {
+        auto gone = std::lock_guard<std::mutex>(deletemu);
+        merged_nodes.swap(deleted_nodes_);
+        merged_nodes_set.swap(deleted_nodes_set_);
+      }
       auto id_map =
-          disk_index_->merge_deletes(cur_index_prefix_, out_prefix, deleted_nodes_, deleted_nodes_set_, merge_threads);
+          disk_index_->merge_deletes(cur_index_prefix_, out_prefix, merged_nodes, merged_nodes_set, merge_threads);
 
       // Merge attr_indexes.
       for (auto &[key, attr_index] : attr_index_map_) {
@@ -507,11 +524,11 @@ class DynamicIndex : public BaseDynamicIndex {
 
       cur_index_prefix_ = index_prefix;
       auto gone = std::lock_guard<std::mutex>(deletemu);
-      for (const TagT &tag : deleted_nodes_) {
-        markdeleted(tag, false);
+      for (const TagT &tag : merged_nodes) {
+        if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
+          markdeleted(tag, false);
+        }
       }
-      deleted_nodes_.clear();
-      deleted_nodes_set_.clear();
     }
 
     if (!use_disk_index_ || use_mem_index_for_disk_index_) {
