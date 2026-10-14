@@ -173,29 +173,7 @@ endif()
 add_subdirectory(src)
 
 # tests/ and tests/utils/ are dropped: they share eleven target names with
-# DGAI, which the fnct-db umbrella build configures in the same tree. The
-# bench sources live in ${EVALDIR} next to DGAI's and SPFresh's, so all three
-# systems' bench code can be read side by side, but they must be compiled
-# here to inherit this directory's definitions.
-foreach(dataset sift deep spacev)
-	add_executable(pipeann_${dataset} "${EVALDIR}/bench_pipeann_${dataset}.cpp")
-	target_include_directories(pipeann_${dataset} PRIVATE "${EVALDIR}")
-	target_link_libraries(pipeann_${dataset} ${PROJECT_NAME})
-endforeach()
-
-if(DEFINED ODINDIR)
-	add_executable(odinins "${ODINDIR}/odinins.cc")
-	target_include_directories(odinins PRIVATE "${EVALDIR}")
-	target_link_libraries(odinins ${PROJECT_NAME})
-	add_executable(odinsweep "${ODINDIR}/odinsweep.cc")
-	target_link_libraries(odinsweep ${PROJECT_NAME})
-endif()
-
-if(DEFINED DELDIR)
-	add_executable(odindel "${DELDIR}/odindel.cc")
-	target_include_directories(odindel PRIVATE "${EVALDIR}")
-	target_link_libraries(odindel ${PROJECT_NAME})
-endif()
+# other systems the fnct-db umbrella build configures in the same tree.
 
 # The CONDA port against condaann's own in-memory CONDA: the reference is compiled
 # from ${CONDADIR} into its own library, its headers first, so they never meet ours.
