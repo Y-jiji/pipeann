@@ -52,35 +52,12 @@ namespace pipeann {
       destroy_table();
     }
 
-    // Deep copy of other's tables. A merge's shuffle hands the new PQ handler
-    // this copy rather than moving other's, which searches under merge_lock
-    // still read until the handlers swap.
-    void clone(const FixedChunkPQTable &other) {
-      destroy_table();
-      this->ndims = other.ndims;
-      this->n_chunks = other.n_chunks;
-      this->metric = other.metric;
-      if (other.tables != nullptr) {
-        tables = new float[NUM_PQ_CENTROIDS * ndims];
-        memcpy(tables, other.tables, NUM_PQ_CENTROIDS * ndims * sizeof(float));
-      }
-      if (other.centroid != nullptr) {
-        centroid = new float[ndims];
-        memcpy(centroid, other.centroid, ndims * sizeof(float));
-      }
-      if (other.chunk_offsets != nullptr) {
-        chunk_offsets = new uint32_t[n_chunks + 1];
-        memcpy(chunk_offsets, other.chunk_offsets, (n_chunks + 1) * sizeof(uint32_t));
-      }
-      if (other.tables_T != nullptr) {
-        pipeann::alloc_aligned((void **) &tables_T, NUM_PQ_CENTROIDS * ndims * sizeof(float), 64);
-        memcpy(tables_T, other.tables_T, NUM_PQ_CENTROIDS * ndims * sizeof(float));
-      }
-      if (other.all_to_all_dists != nullptr) {
-        all_to_all_dists = new float[NUM_PQ_CENTROIDS * NUM_PQ_CENTROIDS * n_chunks];
-        memcpy(all_to_all_dists, other.all_to_all_dists, all_to_all_dist_size());
-      }
-    }
+    /**
+     * @brief Become a deep copy of other's tables, which a merge's shuffle hands the new PQ handler
+     * instead of moving other's, as searches under merge_lock still read them until the swap
+     * @param other the table to copy
+     */
+    void clone(const FixedChunkPQTable &other);
 
     void destroy_table() {
       if (tables != nullptr) {
@@ -388,4 +365,34 @@ namespace pipeann {
       }
     }
   };
+
+  template<typename T>
+  void FixedChunkPQTable<T>::clone(const FixedChunkPQTable &other) {
+    // [1]
+    destroy_table();
+    this->ndims = other.ndims;
+    this->n_chunks = other.n_chunks;
+    this->metric = other.metric;
+    // [2]
+    if (other.tables != nullptr) {
+      tables = new float[NUM_PQ_CENTROIDS * ndims];
+      memcpy(tables, other.tables, NUM_PQ_CENTROIDS * ndims * sizeof(float));
+    }
+    if (other.centroid != nullptr) {
+      centroid = new float[ndims];
+      memcpy(centroid, other.centroid, ndims * sizeof(float));
+    }
+    if (other.chunk_offsets != nullptr) {
+      chunk_offsets = new uint32_t[n_chunks + 1];
+      memcpy(chunk_offsets, other.chunk_offsets, (n_chunks + 1) * sizeof(uint32_t));
+    }
+    if (other.tables_T != nullptr) {
+      pipeann::alloc_aligned((void **) &tables_T, NUM_PQ_CENTROIDS * ndims * sizeof(float), 64);
+      memcpy(tables_T, other.tables_T, NUM_PQ_CENTROIDS * ndims * sizeof(float));
+    }
+    if (other.all_to_all_dists != nullptr) {
+      all_to_all_dists = new float[NUM_PQ_CENTROIDS * NUM_PQ_CENTROIDS * n_chunks];
+      memcpy(all_to_all_dists, other.all_to_all_dists, all_to_all_dist_size());
+    }
+  }
 }  // namespace pipeann

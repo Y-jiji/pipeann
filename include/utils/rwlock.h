@@ -3,51 +3,84 @@
 #include <pthread.h>
 
 namespace pipeann {
-  // A shared mutex whose waiting writer holds new readers off, unlike glibc's default
-  // reader-preferring rwlock behind std::shared_mutex, so a merge's brief exclusive section
-  // gets in while searches keep arriving. Shared holds must not nest on one thread.
+  /**
+   * @brief A shared mutex whose waiting writer holds new readers off, unlike glibc's default
+   * reader-preferring rwlock behind std::shared_mutex, so a merge's brief exclusive section gets in
+   * while searches keep arriving; shared holds must not nest on one thread
+   */
   class WriterFirstMutex {
    public:
-    WriterFirstMutex() {
-      pthread_rwlockattr_t attr;
-      pthread_rwlockattr_init(&attr);
-      pthread_rwlockattr_setkind_np(&attr, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
-      pthread_rwlock_init(&handle, &attr);
-      pthread_rwlockattr_destroy(&attr);
-    }
+    /** @brief A writer-preferring, non-recursive pthread rwlock */
+    WriterFirstMutex();
 
-    ~WriterFirstMutex() {
-      pthread_rwlock_destroy(&handle);
-    }
+    /** @brief Destroy the rwlock */
+    ~WriterFirstMutex();
 
     WriterFirstMutex(const WriterFirstMutex &) = delete;
     WriterFirstMutex &operator=(const WriterFirstMutex &) = delete;
 
-    void lock() {
-      pthread_rwlock_wrlock(&handle);
-    }
+    /** @brief Hold it exclusively, new readers waiting behind */
+    void lock();
 
-    bool try_lock() {
-      return pthread_rwlock_trywrlock(&handle) == 0;
-    }
+    /**
+     * @brief Hold it exclusively if free
+     * @return whether it was taken
+     */
+    bool try_lock();
 
-    void unlock() {
-      pthread_rwlock_unlock(&handle);
-    }
+    /** @brief Release an exclusive hold */
+    void unlock();
 
-    void lock_shared() {
-      pthread_rwlock_rdlock(&handle);
-    }
+    /** @brief Hold it shared, waiting behind any waiting writer */
+    void lock_shared();
 
-    bool try_lock_shared() {
-      return pthread_rwlock_tryrdlock(&handle) == 0;
-    }
+    /**
+     * @brief Hold it shared if no writer holds or waits
+     * @return whether it was taken
+     */
+    bool try_lock_shared();
 
-    void unlock_shared() {
-      pthread_rwlock_unlock(&handle);
-    }
+    /** @brief Release a shared hold */
+    void unlock_shared();
 
    private:
     pthread_rwlock_t handle;
   };
+
+  inline WriterFirstMutex::WriterFirstMutex() {
+    // [1]
+    pthread_rwlockattr_t attr;
+    pthread_rwlockattr_init(&attr);
+    pthread_rwlockattr_setkind_np(&attr, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+    pthread_rwlock_init(&handle, &attr);
+    pthread_rwlockattr_destroy(&attr);
+  }
+
+  inline WriterFirstMutex::~WriterFirstMutex() {
+    pthread_rwlock_destroy(&handle);
+  }
+
+  inline void WriterFirstMutex::lock() {
+    pthread_rwlock_wrlock(&handle);
+  }
+
+  inline bool WriterFirstMutex::try_lock() {
+    return pthread_rwlock_trywrlock(&handle) == 0;
+  }
+
+  inline void WriterFirstMutex::unlock() {
+    pthread_rwlock_unlock(&handle);
+  }
+
+  inline void WriterFirstMutex::lock_shared() {
+    pthread_rwlock_rdlock(&handle);
+  }
+
+  inline bool WriterFirstMutex::try_lock_shared() {
+    return pthread_rwlock_tryrdlock(&handle) == 0;
+  }
+
+  inline void WriterFirstMutex::unlock_shared() {
+    pthread_rwlock_unlock(&handle);
+  }
 }  // namespace pipeann
