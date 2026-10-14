@@ -572,6 +572,11 @@ class DynamicIndex : public BaseDynamicIndex {
     return cur_index_prefix_;
   }
 
+  // The parameters the index was built with; max_nthreads sizes its query buffers, two per thread.
+  const pipeann::IndexBuildParameters &build_params() const {
+    return params_;
+  }
+
  private:
   void do_insert(const T *point_p, TagT tag, const pipeann::Attributes *attrs = nullptr,
                  pipeann::QueryStats *stats = nullptr, std::uint64_t *pages = nullptr,
