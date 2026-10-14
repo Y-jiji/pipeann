@@ -43,7 +43,9 @@ namespace pipeann {
         memcpy(pq_nbr_handler->data.data() + i * this->pq_table.n_chunks,
                this->data.data() + rev_id_map.find(i) * this->pq_table.n_chunks, this->pq_table.n_chunks);
       }
-      pq_nbr_handler->pq_table = std::move(this->pq_table);
+      // A copy, not a move: searches still read this->pq_table until the merge
+      // swaps the handlers under merge_lock.
+      pq_nbr_handler->pq_table.clone(this->pq_table);
       pq_nbr_handler->npoints = new_npoints;
       return abs_nbr_handler;
     }
