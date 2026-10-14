@@ -16,6 +16,7 @@
 #include "utils/concurrent_queue.h"
 #include "utils/lock_table.h"
 #include "utils/percentile_stats.h"
+#include "utils/rwlock.h"
 #include "utils/tsl/robin_map.h"
 #include "nbr/abstract_nbr.h"
 #include "utils.h"
@@ -287,7 +288,8 @@ namespace pipeann {
     // Held exclusive during the final metadata swap in merge_deletes + reload.
     // Acquired in merge_deletes; released in reload. Callers that invoke reload
     // again (e.g. after copy_index in the double-version path) must re-acquire.
-    std::shared_mutex merge_lock;
+    // Writer-first, so a merge's swap gets in while searches keep taking it shared.
+    WriterFirstMutex merge_lock;
 
    private:
     // Background insert I/O commit.
