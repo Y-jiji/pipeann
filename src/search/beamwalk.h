@@ -3,7 +3,6 @@
 
 #include <chrono>
 #include <tuple>
-#include "utils/timer.h"
 #include "utils/tsl/robin_set.h"
 
 namespace pipeann {
