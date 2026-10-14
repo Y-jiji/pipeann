@@ -337,6 +337,24 @@ class DynamicIndex : public BaseDynamicIndex {
                 pipeann::QueryStats *stats = nullptr, pipeann::Selector *selector = nullptr,
                 const pipeann::Attributes *query_attrs = nullptr,
                 float range = std::numeric_limits<float>::infinity()) {
+    // Join the current epoch, so no save clears a bit this search may still filter with.
+    uint64_t epoch = searchepoch.load();
+    for (;;) {
+      searching[epoch & 1].fetch_add(1);
+      const uint64_t now = searchepoch.load();
+      if (now == epoch) {
+        break;
+      }
+      searching[epoch & 1].fetch_sub(1);
+      epoch = now;
+    }
+    struct Leave {
+      std::atomic<uint64_t> &count;
+      ~Leave() {
+        count.fetch_sub(1);
+      }
+    } leave{searching[epoch & 1]};
+
     std::vector<TagT> tags(L);
     std::vector<float> distances(L);
     const bool use_range = !std::isinf(range);
@@ -349,7 +367,7 @@ class DynamicIndex : public BaseDynamicIndex {
       n_valid =
           disk_index_->range_search(query, range, tags.data(), distances.data(), kSearchBeamWidth, mem_L, L, stats);
     } else if (use_disk_index_) {
-      disk_index_->pipe_search(query, L, mem_L, L, tags.data(), distances.data(), kSearchBeamWidth, stats);
+      n_valid = disk_index_->pipe_search(query, L, mem_L, L, tags.data(), distances.data(), kSearchBeamWidth, stats);
     } else {
       mem_index_->search_with_tags(query, L, L, tags.data(), distances.data());
     }
@@ -523,6 +541,12 @@ class DynamicIndex : public BaseDynamicIndex {
       }
 
       cur_index_prefix_ = index_prefix;
+      // A search that took its candidates from the old index may still filter with the merged
+      // tags' bits: close its epoch and wait for the searches in it before clearing them.
+      const uint64_t closing = searchepoch.fetch_add(1);
+      while (searching[closing & 1].load() != 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+      }
       auto gone = std::lock_guard<std::mutex>(deletemu);
       for (const TagT &tag : merged_nodes) {
         if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
@@ -627,6 +651,9 @@ class DynamicIndex : public BaseDynamicIndex {
   std::unique_ptr<std::atomic<std::atomic<uint64_t> *>[]> deletebits{
       new std::atomic<std::atomic<uint64_t> *>[1ull << (32 - DELETE_SHIFT)]()};
   std::vector<std::unique_ptr<std::atomic<uint64_t>[]>> deletepages;
+  // Save's epoch, and the searches in flight per epoch parity; a save waits out the epoch it closes.
+  std::atomic<uint64_t> searchepoch{0};
+  std::atomic<uint64_t> searching[2]{};
 
   // if vectors are less than the threshold, use mem index instead.
   std::mt19937 gen;
