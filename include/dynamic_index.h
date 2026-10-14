@@ -337,7 +337,6 @@ class DynamicIndex : public BaseDynamicIndex {
                 pipeann::QueryStats *stats = nullptr, pipeann::Selector *selector = nullptr,
                 const pipeann::Attributes *query_attrs = nullptr,
                 float range = std::numeric_limits<float>::infinity()) {
-    // Join the current epoch, so no save clears a bit this search may still filter with.
     uint64_t epoch = searchepoch.load();
     for (;;) {
       searching[epoch & 1].fetch_add(1);
@@ -348,12 +347,6 @@ class DynamicIndex : public BaseDynamicIndex {
       searching[epoch & 1].fetch_sub(1);
       epoch = now;
     }
-    struct Leave {
-      std::atomic<uint64_t> &count;
-      ~Leave() {
-        count.fetch_sub(1);
-      }
-    } leave{searching[epoch & 1]};
 
     std::vector<TagT> tags(L);
     std::vector<float> distances(L);
@@ -380,6 +373,7 @@ class DynamicIndex : public BaseDynamicIndex {
         pos++;
       }
     }
+    searching[epoch & 1].fetch_sub(1);
     if (use_range) {
       for (size_t j = pos; j < topk; j++) {
         out_ids[j] = std::numeric_limits<TagT>::max();
@@ -453,10 +447,11 @@ class DynamicIndex : public BaseDynamicIndex {
     if (use_disk_index_) disk_index_->stop_bg_io();
   }
 
-  // Single-point lazy delete (marks tag for future merge).
-  // On a disk index it never waits for a save: the save merges a snapshot of the
-  // deletes, and those arriving meanwhile go to the next one, as deletes during a
-  // merge are handled in memory. A memory index, which save writes out, still waits.
+  /**
+   * @brief Single-point lazy delete, marking tag for a future merge; on a disk index it never waits
+   * for a save, which merges a snapshot, and under CONDA, which never merges, it only sets the bit
+   * @param tag the tag to delete
+   */
   void lazy_delete(const TagT &tag) {
     auto mu = std::shared_lock<std::shared_mutex>(save_mu_, std::defer_lock);
     if (!use_disk_index_ || use_mem_index_for_disk_index_) {
@@ -464,7 +459,9 @@ class DynamicIndex : public BaseDynamicIndex {
     }
     {
       auto gone = std::lock_guard<std::mutex>(deletemu);
-      if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
+      if (params_.conda != 0) {
+        markdeleted(tag, true);
+      } else if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
         deleted_nodes_set_.insert(tag);
         deleted_nodes_.push_back(tag);
         markdeleted(tag, true);
@@ -483,7 +480,9 @@ class DynamicIndex : public BaseDynamicIndex {
       auto gone = std::lock_guard<std::mutex>(deletemu);
       for (uint32_t i = 0; i < n_tags; i++) {
         TagT tag = tags[i];
-        if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
+        if (params_.conda != 0) {
+          markdeleted(tag, true);
+        } else if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
           deleted_nodes_set_.insert(tag);
           deleted_nodes_.push_back(tag);
           markdeleted(tag, true);
@@ -514,7 +513,6 @@ class DynamicIndex : public BaseDynamicIndex {
         LOG(INFO) << "Saving to the same index prefix. Using double-version: " << out_prefix;
       }
 
-      // The deletes this merge takes; later ones collect in the emptied sets.
       std::vector<TagT> merged_nodes;
       tsl::robin_set<TagT> merged_nodes_set;
       {
@@ -534,15 +532,13 @@ class DynamicIndex : public BaseDynamicIndex {
 
       if (cur_index_prefix_ == index_prefix) {
         LOG(INFO) << "Copying index from " << out_prefix << " to " << index_prefix;
-        disk_index_->copy_index(out_prefix, index_prefix);
         // First reload released merge_lock; re-acquire to pair with the unlock in this reload.
         disk_index_->merge_lock.lock();
+        disk_index_->copy_index(out_prefix, index_prefix);
         disk_index_->reload(index_prefix.c_str());
       }
 
       cur_index_prefix_ = index_prefix;
-      // A search that took its candidates from the old index may still filter with the merged
-      // tags' bits: close its epoch and wait for the searches in it before clearing them.
       const uint64_t closing = searchepoch.fetch_add(1);
       while (searching[closing & 1].load() != 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(50));
@@ -572,10 +568,11 @@ class DynamicIndex : public BaseDynamicIndex {
     return cur_index_prefix_;
   }
 
-  // The parameters the index was built with; max_nthreads sizes its query buffers, two per thread.
-  const pipeann::IndexBuildParameters &build_params() const {
-    return params_;
-  }
+  /**
+   * @brief The parameters the index was built with; max_nthreads sizes its query buffers, two each
+   * @return the build parameters
+   */
+  const pipeann::IndexBuildParameters &build_params() const;
 
  private:
   void do_insert(const T *point_p, TagT tag, const pipeann::Attributes *attrs = nullptr,
@@ -616,48 +613,34 @@ class DynamicIndex : public BaseDynamicIndex {
   std::vector<TagT> deleted_nodes_;
   tsl::robin_set<TagT> deleted_nodes_set_;  // copy of deleted nodes.
 
-  // Whether tag is lazily deleted since the last save, read by every search without a lock.
-  bool isdeleted(TagT tag) const {
-    const std::atomic<uint64_t> *page = deletebits[tag >> DELETE_SHIFT].load(std::memory_order_acquire);
-    if (page == nullptr) {
-      return false;
-    }
-    const uint32_t slot = tag & ((1u << DELETE_SHIFT) - 1);
-    return (page[slot >> 6].load(std::memory_order_relaxed) >> (slot & 63)) & 1;
-  }
+  /**
+   * @brief Whether tag is lazily deleted since the last save, read by every search without a lock
+   * @param tag the tag
+   * @return whether its bit is set
+   */
+  bool isdeleted(TagT tag) const;
 
-  // Set (gone) or clear tag's bit, publishing its page first if absent; the caller holds deletemu.
-  void markdeleted(TagT tag, bool gone) {
-    std::atomic<uint64_t> *page = deletebits[tag >> DELETE_SHIFT].load(std::memory_order_relaxed);
-    if (page == nullptr) {
-      if (!gone) {
-        return;
-      }
-      deletepages.emplace_back(new std::atomic<uint64_t>[DELETE_WORDS]());
-      page = deletepages.back().get();
-      deletebits[tag >> DELETE_SHIFT].store(page, std::memory_order_release);
-    }
-    const uint32_t slot = tag & ((1u << DELETE_SHIFT) - 1);
-    const uint64_t bit = 1ull << (slot & 63);
-    if (gone) {
-      page[slot >> 6].fetch_or(bit, std::memory_order_relaxed);
-    } else {
-      page[slot >> 6].fetch_and(~bit, std::memory_order_relaxed);
-    }
-  }
+  /**
+   * @brief Set or clear tag's bit, publishing its page first if absent; the caller holds deletemu
+   * @param tag the tag
+   * @param gone whether to set the bit
+   */
+  void markdeleted(TagT tag, bool gone);
 
-  // Tags per page of deletebits, as a shift, and the 64-bit words of one page.
+  /** @brief Tags per page of deletebits, as a shift */
   static constexpr uint32_t DELETE_SHIFT = 16;
+  /** @brief 64-bit words of one page of deletebits */
   static constexpr uint32_t DELETE_WORDS = (1u << DELETE_SHIFT) / 64;
-  // Serializes lazy deletes and save's clear over deleted_nodes_, deleted_nodes_set_ and deletebits.
+  /** @brief Serializes lazy deletes and save's clear over the deleted sets and deletebits */
   std::mutex deletemu;
-  // Pages of one bit per tag, set while the tag is lazily deleted; a page, once published, lives as
-  // long as the index, owned by deletepages.
+  /** @brief Pages of one bit per tag, set while lazily deleted, each living as long as the index */
   std::unique_ptr<std::atomic<std::atomic<uint64_t> *>[]> deletebits{
       new std::atomic<std::atomic<uint64_t> *>[1ull << (32 - DELETE_SHIFT)]()};
+  /** @brief Owner of the pages deletebits points to */
   std::vector<std::unique_ptr<std::atomic<uint64_t>[]>> deletepages;
-  // Save's epoch, and the searches in flight per epoch parity; a save waits out the epoch it closes.
+  /** @brief Save's epoch, which a search joins and a save closes before clearing bits */
   std::atomic<uint64_t> searchepoch{0};
+  /** @brief Searches in flight per epoch parity, waited out by the save that closes their epoch */
   std::atomic<uint64_t> searching[2]{};
 
   // if vectors are less than the threshold, use mem index instead.
@@ -670,3 +653,41 @@ class DynamicIndex : public BaseDynamicIndex {
   std::map<uint32_t, pipeann::AttrIndex *> attr_index_map_;  // non-owning key -> attr_index mapping
   uint32_t mem_L = 0;                                        // memory search L in pipe search.
 };
+
+template<class T>
+const pipeann::IndexBuildParameters &DynamicIndex<T>::build_params() const {
+  return params_;
+}
+
+template<class T>
+bool DynamicIndex<T>::isdeleted(TagT tag) const {
+  // [1]
+  const std::atomic<uint64_t> *page = deletebits[tag >> DELETE_SHIFT].load(std::memory_order_acquire);
+  if (page == nullptr) {
+    return false;
+  }
+  const uint32_t slot = tag & ((1u << DELETE_SHIFT) - 1);
+  return (page[slot >> 6].load(std::memory_order_relaxed) >> (slot & 63)) & 1;
+}
+
+template<class T>
+void DynamicIndex<T>::markdeleted(TagT tag, bool gone) {
+  // [1]
+  std::atomic<uint64_t> *page = deletebits[tag >> DELETE_SHIFT].load(std::memory_order_relaxed);
+  if (page == nullptr) {
+    if (!gone) {
+      return;
+    }
+    deletepages.emplace_back(new std::atomic<uint64_t>[DELETE_WORDS]());
+    page = deletepages.back().get();
+    deletebits[tag >> DELETE_SHIFT].store(page, std::memory_order_release);
+  }
+  // [2]
+  const uint32_t slot = tag & ((1u << DELETE_SHIFT) - 1);
+  const uint64_t bit = 1ull << (slot & 63);
+  if (gone) {
+    page[slot >> 6].fetch_or(bit, std::memory_order_relaxed);
+  } else {
+    page[slot >> 6].fetch_and(~bit, std::memory_order_relaxed);
+  }
+}
