@@ -1,6 +1,7 @@
 #pragma once
 
 #include <omp.h>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -354,9 +355,8 @@ class DynamicIndex : public BaseDynamicIndex {
     }
 
     size_t pos = 0;
-    auto gone = std::shared_lock<std::shared_mutex>(deletemu);
     for (size_t j = 0; j < n_valid && pos < topk; j++) {
-      if (this->deleted_nodes_set_.find(tags[j]) == this->deleted_nodes_set_.end()) {
+      if (!isdeleted(tags[j])) {
         out_ids[pos] = tags[j];
         out_dists[pos] = distances[j];
         pos++;
@@ -439,10 +439,11 @@ class DynamicIndex : public BaseDynamicIndex {
   void lazy_delete(const TagT &tag) {
     auto mu = std::shared_lock<std::shared_mutex>(save_mu_);
     {
-      auto gone = std::unique_lock<std::shared_mutex>(deletemu);
+      auto gone = std::lock_guard<std::mutex>(deletemu);
       if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
         deleted_nodes_set_.insert(tag);
         deleted_nodes_.push_back(tag);
+        markdeleted(tag, true);
       }
     }
     mem_index_->lazy_delete(tag);
@@ -452,12 +453,13 @@ class DynamicIndex : public BaseDynamicIndex {
   void remove(const TagT *tags, uint32_t n_tags) {
     auto mu = std::shared_lock<std::shared_mutex>(save_mu_);
     {
-      auto gone = std::unique_lock<std::shared_mutex>(deletemu);
+      auto gone = std::lock_guard<std::mutex>(deletemu);
       for (uint32_t i = 0; i < n_tags; i++) {
         TagT tag = tags[i];
         if (deleted_nodes_set_.find(tag) == deleted_nodes_set_.end()) {
           deleted_nodes_set_.insert(tag);
           deleted_nodes_.push_back(tag);
+          markdeleted(tag, true);
         }
       }
     }
@@ -504,7 +506,10 @@ class DynamicIndex : public BaseDynamicIndex {
       }
 
       cur_index_prefix_ = index_prefix;
-      auto gone = std::unique_lock<std::shared_mutex>(deletemu);
+      auto gone = std::lock_guard<std::mutex>(deletemu);
+      for (const TagT &tag : deleted_nodes_) {
+        markdeleted(tag, false);
+      }
       deleted_nodes_.clear();
       deleted_nodes_set_.clear();
     }
@@ -564,8 +569,47 @@ class DynamicIndex : public BaseDynamicIndex {
   pipeann::Metric metric_;
   std::vector<TagT> deleted_nodes_;
   tsl::robin_set<TagT> deleted_nodes_set_;  // copy of deleted nodes.
-  std::shared_mutex deletemu;               // deleted_nodes_ and deleted_nodes_set_, written by lazy deletes and
-                                            // save, read by every search.
+
+  // Whether tag is lazily deleted since the last save, read by every search without a lock.
+  bool isdeleted(TagT tag) const {
+    const std::atomic<uint64_t> *page = deletebits[tag >> DELETE_SHIFT].load(std::memory_order_acquire);
+    if (page == nullptr) {
+      return false;
+    }
+    const uint32_t slot = tag & ((1u << DELETE_SHIFT) - 1);
+    return (page[slot >> 6].load(std::memory_order_relaxed) >> (slot & 63)) & 1;
+  }
+
+  // Set (gone) or clear tag's bit, publishing its page first if absent; the caller holds deletemu.
+  void markdeleted(TagT tag, bool gone) {
+    std::atomic<uint64_t> *page = deletebits[tag >> DELETE_SHIFT].load(std::memory_order_relaxed);
+    if (page == nullptr) {
+      if (!gone) {
+        return;
+      }
+      deletepages.emplace_back(new std::atomic<uint64_t>[DELETE_WORDS]());
+      page = deletepages.back().get();
+      deletebits[tag >> DELETE_SHIFT].store(page, std::memory_order_release);
+    }
+    const uint32_t slot = tag & ((1u << DELETE_SHIFT) - 1);
+    const uint64_t bit = 1ull << (slot & 63);
+    if (gone) {
+      page[slot >> 6].fetch_or(bit, std::memory_order_relaxed);
+    } else {
+      page[slot >> 6].fetch_and(~bit, std::memory_order_relaxed);
+    }
+  }
+
+  // Tags per page of deletebits, as a shift, and the 64-bit words of one page.
+  static constexpr uint32_t DELETE_SHIFT = 16;
+  static constexpr uint32_t DELETE_WORDS = (1u << DELETE_SHIFT) / 64;
+  // Serializes lazy deletes and save's clear over deleted_nodes_, deleted_nodes_set_ and deletebits.
+  std::mutex deletemu;
+  // Pages of one bit per tag, set while the tag is lazily deleted; a page, once published, lives as
+  // long as the index, owned by deletepages.
+  std::unique_ptr<std::atomic<std::atomic<uint64_t> *>[]> deletebits{
+      new std::atomic<std::atomic<uint64_t> *>[1ull << (32 - DELETE_SHIFT)]()};
+  std::vector<std::unique_ptr<std::atomic<uint64_t>[]>> deletepages;
 
   // if vectors are less than the threshold, use mem index instead.
   std::mt19937 gen;
