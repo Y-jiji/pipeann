@@ -272,13 +272,9 @@ namespace pipeann {
     };
 
     // --- Node selection ---
-    const bool strict = this->params.conda == 2;
     auto calc_best_node = [&]() -> int {
       unsigned marker = 0, nk = cur_list_size, first_unvisited_eager = cur_list_size;
       for (marker = 0; marker < cur_list_size; ++marker) {
-        if (strict && !retset[marker].visited && id_buf_map.find(retset[marker].id) == id_buf_map.end()) {
-          break;
-        }
         if (!retset[marker].visited && id_buf_map.find(retset[marker].id) != id_buf_map.end()) {
           PTRACE_IN("X %u %u", retset[marker].id, marker);
           retset[marker].flag = false;

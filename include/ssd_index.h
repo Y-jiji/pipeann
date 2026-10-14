@@ -443,6 +443,28 @@ namespace pipeann {
                         std::vector<Neighbor> &expanded_nodes_info, QueryStats *stats = nullptr,
                         InsertContext *insert_ctx = nullptr);
 
+    /**
+     * @brief The non-pipelined beam search: rounds of beam_width blocking reads, each round expanded
+     *  before the next is read, so beam width 1 walks strictly best first; SHAME(TALLFUNC) SHAME(MANYARG)
+     * @tparam SpecFn (id) -> bool, whether a discovered neighbor may enter the candidate list
+     * @tparam VerifyFn (id, node) -> bool, called on each expansion, whether it joins full_retset
+     * @param query the query vector
+     * @param mem_L candidates seeded from the in-memory index, 0 for none
+     * @param l_search the candidate list
+     * @param beam_width reads per round
+     * @param is_member_approx the neighbor filter
+     * @param is_member the expansion callback
+     * @param full_retset every accepted expansion at its exact distance, sorted
+     * @param stats walk counters, may be null
+     * @param insert_ctx coordinates and pages kept for an update, may be null
+     * @param seeds candidates seeded in place of the entry point, may be null
+     */
+    template<typename SpecFn, typename VerifyFn>
+    void beam_search_common(const T *query, uint32_t mem_L, uint64_t l_search, uint64_t beam_width,
+                            SpecFn is_member_approx, VerifyFn is_member, std::vector<Neighbor> &full_retset,
+                            QueryStats *stats = nullptr, InsertContext *insert_ctx = nullptr,
+                            const std::vector<uint32_t> *seeds = nullptr);
+
     void do_pipe_search(const T *query, uint32_t mem_L, uint32_t l_search, const uint64_t beam_width,
                         std::vector<Neighbor> &expanded_nodes_info, QueryStats *stats = nullptr,
                         InsertContext *insert_ctx = nullptr);

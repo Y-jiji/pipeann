@@ -21,6 +21,7 @@
 #include "utils.h"
 #include "linux_aligned_file_reader.h"
 #include "../search/pipe_search_common.h"
+#include "../search/beamwalk.h"
 
 namespace pipeann {
   /** @brief Candidate list of CONDA's repair walk around a deleted vertex */
@@ -307,9 +308,14 @@ namespace pipeann {
     InsertContext ctx(kExpandedNodesFactor * listn, aligned_dim);
     std::vector<Neighbor> full;
     const std::vector<T> query = op.point[self];
-    const float unbounded = std::numeric_limits<float>::infinity();
-    this->pipe_search_common(query.data(), 0, listn, listn, params.beam_width, io_size, false,
-                             approx, verify, full, stats, &ctx, unbounded, &seeds);
+    if (params.conda == 2) {
+      this->beam_search_common(query.data(), 0, listn, 1, approx, verify, full, stats, &ctx,
+                               &seeds);
+    } else {
+      const float unbounded = std::numeric_limits<float>::infinity();
+      this->pipe_search_common(query.data(), 0, listn, listn, params.beam_width, io_size, false,
+                               approx, verify, full, stats, &ctx, unbounded, &seeds);
+    }
     // [3]
     expanded.clear();
     for (uint32_t id : order) {
