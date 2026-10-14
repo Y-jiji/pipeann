@@ -324,12 +324,13 @@ namespace pipeann {
     reader->open(disk_index_file, true, false);
 
     // reload metadata.
+    const uint64_t stale_loc = this->cur_loc;
     SSDIndexMetadata<T> meta;
     meta.load_from_disk_index(disk_index_file);
     this->init_metadata(meta);
 
     // No need to reload PQ, as it is already reloaded in merge_deletes.
-    for (uint32_t i = this->meta_.npoints; i < this->cur_loc; ++i) {
+    for (uint64_t i = this->meta_.npoints; i < std::max<uint64_t>(stale_loc, this->cur_loc); ++i) {
       set_loc2id(i, kInvalidID);  // reset loc2id.
     }
     while (!this->empty_pages.empty()) {
