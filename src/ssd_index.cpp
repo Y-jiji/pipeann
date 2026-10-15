@@ -1099,6 +1099,13 @@ namespace pipeann {
     LOG(INFO) << "dumpgraph: " << total << " nodes, " << kept << " edges to " << path;
   }
 
+  template<typename T, typename TagT>
+  void SSDIndex<T, TagT>::set_beam_widths(uint32_t insert, uint32_t remove) {
+    // [1]
+    params.beam_width = insert;
+    params.delete_beam_width = remove;
+  }
+
   template class SSDIndex<float>;
   template class SSDIndex<int8_t>;
   template class SSDIndex<uint8_t>;

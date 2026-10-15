@@ -349,7 +349,8 @@ namespace pipeann {
                                &seeds);
     } else {
       const float unbounded = std::numeric_limits<float>::infinity();
-      this->pipe_search_common(query.data(), 0, listn, listn, params.beam_width, io_size, false,
+      const uint32_t width = seek == CondaSeek::HEAL ? params.delete_beam_width : params.beam_width;
+      this->pipe_search_common(query.data(), 0, listn, listn, width, io_size, false,
                                approx, verify, full, stats, &ctx, unbounded, &seeds);
     }
     // [3]

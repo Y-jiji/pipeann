@@ -352,6 +352,7 @@ namespace pipeann {
     uint32_t num_threads = 0;    // num_threads used for build (0 uses all available threads).
     bool saturate_graph = true;  // saturate graph during build (using kNN neighbors).
     uint32_t beam_width = 8;     // insert beam width. (for SSD)
+    uint32_t delete_beam_width = 8;  // CONDA delete repair's search beam width. (for SSD)
     bool use_pipnn = false;
     PiPNNConfig pipnn_config;
 

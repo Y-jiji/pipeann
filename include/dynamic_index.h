@@ -48,10 +48,6 @@ template<class T>
 class DynamicIndex : public BaseDynamicIndex {
   static constexpr float kMemIndexP = 0.01;
   static constexpr uint32_t kBuildThreshold = 100000;
-  // Beam width for query search, i.e. how many records a hop reads at once.
-  // OdinANN (FAST '26) evaluates at 4. Insert is unaffected, its internal
-  // search takes params.beam_width instead (see direct_insert.cpp).
-  static constexpr uint32_t kSearchBeamWidth = 4;
   using TagT = uint32_t;
 
  public:
@@ -101,11 +97,24 @@ class DynamicIndex : public BaseDynamicIndex {
   // fds leak (raw-pointer TLS runs no destructor on thread exit).
   void deregister_thread() { reader_->deregister_thread(); }
 
-  // Trace-driver access: pipe_search's beam width is fixed at
-  // kSearchBeamWidth on the search() path, but a trace has to be captured at
-  // several widths to exercise the adaptive ramp. Neither accessor has any
-  // behaviour of its own.
+  // Trace-driver access: pipe_search's beam width on the search() path is
+  // search_beam_width_, but a trace has to be captured at several widths to
+  // exercise the adaptive ramp. Neither accessor has any behaviour of its own.
   pipeann::SSDIndex<T, TagT> *disk_index() { return disk_index_.get(); }
+
+  // Beam width of query search, i.e. how many records a hop reads at once,
+  // 4 by default as OdinANN (FAST '26) evaluates; a search reads it once.
+  void set_search_beam_width(uint32_t width) { search_beam_width_.store(width, std::memory_order_relaxed); }
+
+  // Beam widths of the insert search and of CONDA's delete repair search;
+  // call while no insert or delete runs.
+  void set_update_beam_widths(uint32_t insert, uint32_t remove) {
+    params_.beam_width = insert;
+    params_.delete_beam_width = remove;
+    if (disk_index_) {
+      disk_index_->set_beam_widths(insert, remove);
+    }
+  }
 
   // Load an index from disk.
   // If copy_to_shadow is true, the disk index is first copied to a shadow prefix
@@ -352,15 +361,16 @@ class DynamicIndex : public BaseDynamicIndex {
     std::vector<float> distances(L);
     const bool use_range = !std::isinf(range);
     size_t n_valid = L;
+    const uint32_t width = search_beam_width_.load(std::memory_order_relaxed);
 
     if (selector != nullptr) {
       disk_index_->spec_filter_search(query, L, L, selector, *query_attrs, tags.data(), distances.data(),
-                                      kSearchBeamWidth, stats);
+                                      width, stats);
     } else if (use_range) {
       n_valid =
-          disk_index_->range_search(query, range, tags.data(), distances.data(), kSearchBeamWidth, mem_L, L, stats);
+          disk_index_->range_search(query, range, tags.data(), distances.data(), width, mem_L, L, stats);
     } else if (use_disk_index_) {
-      n_valid = disk_index_->pipe_search(query, L, mem_L, L, tags.data(), distances.data(), kSearchBeamWidth, stats);
+      n_valid = disk_index_->pipe_search(query, L, mem_L, L, tags.data(), distances.data(), width, stats);
     } else {
       mem_index_->search_with_tags(query, L, L, tags.data(), distances.data());
     }
@@ -661,6 +671,7 @@ class DynamicIndex : public BaseDynamicIndex {
   std::vector<std::shared_ptr<pipeann::AttrIndex>> native_attr_indexes_;
   std::map<uint32_t, pipeann::AttrIndex *> attr_index_map_;  // non-owning key -> attr_index mapping
   uint32_t mem_L = 0;                                        // memory search L in pipe search.
+  std::atomic<uint32_t> search_beam_width_{4};               // pipe_search's beam width.
 };
 
 template<class T>

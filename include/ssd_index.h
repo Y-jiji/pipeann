@@ -241,6 +241,13 @@ namespace pipeann {
     void dumpgraph(const std::string &path);
 
     /**
+     * @brief Set the beam widths of the update searches; call while no insert or delete runs
+     * @param insert sector reads an insert's search issues together, OdinANN's and CONDA's
+     * @param remove sector reads a CONDA delete repair's search issues together
+     */
+    void set_beam_widths(uint32_t insert, uint32_t remove);
+
+    /**
      * @brief Start CONDA over the loaded graph: every loaded id live and stored, tag i at its id
      * @param base bin file of the loaded points, read once for CONDA's dead test on point[0]
      * @param capacity bound on every id and tag the run will hold
