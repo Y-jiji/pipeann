@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <thread>
 #include "utils/tsl/robin_set.h"
 
@@ -882,6 +883,23 @@ namespace pipeann {
     std::lock_guard<std::mutex> lock(alloc_lock);
     std::vector<uint64_t> ret;
     int cur = 0;
+    // A page whose slots this call does not all take may get records from another insert, which can
+    // lock and write it first; the caller then has to read it under its page lock, or it writes the
+    // whole page from an unread buffer over them.
+    auto finish = [&]() -> std::vector<uint64_t> {
+      if (meta_.nnodes_per_sector != 0) {
+        std::map<uint64_t, uint64_t> taken;
+        for (uint64_t loc : ret) {
+          taken[loc_sector_no(loc)]++;
+        }
+        for (auto &[page, n] : taken) {
+          if (n < meta_.nnodes_per_sector) {
+            page_need_to_read.insert(page);
+          }
+        }
+      }
+      return ret;
+    };
     // Reuse.
     uint32_t threshold = (meta_.nnodes_per_sector + INDEX_SIZE_FACTOR - 1) / INDEX_SIZE_FACTOR;
 
@@ -895,16 +913,16 @@ namespace pipeann {
 #endif
       auto st = sector_to_loc(empty_page, 0);
       auto ed = meta_.nnodes_per_sector == 0 ? st + 1 : st + meta_.nnodes_per_sector;
+      // A hint may have taken the page's slots since it was queued; it is queued again once empty.
+      if (std::any_of(loc2id_.begin() + st, loc2id_.begin() + ed, [](uint32_t id) { return id != kInvalidID; })) {
+        continue;
+      }
       for (uint32_t i = st; i < ed; ++i) {
-        if (unlikely(loc2id_[i] != kInvalidID)) {
-          LOG(ERROR) << "Page " << empty_page << " is not empty " << i << " " << loc2id_[i];
-          crash();
-        }
         loc2id_[i] = kAllocatedID;
         ret.push_back(i);
         ++cur;
         if (cur == n) {
-          return ret;
+          return finish();
         }
       }
     }
@@ -938,7 +956,7 @@ namespace pipeann {
           ret.push_back(i);
           ++cur;
           if (cur == n) {
-            return ret;
+            return finish();
           }
         }
       }
@@ -957,7 +975,7 @@ namespace pipeann {
     while (meta_.nnodes_per_sector != 0 && cur_loc % meta_.nnodes_per_sector != 0) {
       set_loc2id(cur_loc++, kInvalidID);  // auto resize.
     }
-    return ret;
+    return finish();
   }
 
   template<typename T, typename TagT>
