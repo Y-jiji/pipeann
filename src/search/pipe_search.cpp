@@ -29,7 +29,16 @@ namespace pipeann {
                                         const uint64_t beam_width, QueryStats *stats) {
     std::shared_lock lk(merge_lock);
     std::vector<Neighbor> expanded_nodes_info;
-    this->do_pipe_search(query, mem_L, (uint32_t) l_search, beam_width, expanded_nodes_info, stats, nullptr);
+    if (params.conda != 0) {
+      auto untombed = [this](unsigned id) -> bool {
+        return id >= condahead.size() || condahead[id] != 2;
+      };
+      auto always_valid = [](unsigned, const DiskNode<T> &) -> bool { return true; };
+      this->pipe_search_common(query, mem_L, l_search, l_search, beam_width, io_size, false, untombed,
+                               always_valid, expanded_nodes_info, stats, nullptr);
+    } else {
+      this->do_pipe_search(query, mem_L, (uint32_t) l_search, beam_width, expanded_nodes_info, stats, nullptr);
+    }
     return copy_top_k(expanded_nodes_info, k_search, res_tags, distances);
   }
 

@@ -285,10 +285,10 @@ namespace pipeann {
 
     void copy_index(const std::string &prefix_in, const std::string &prefix_out);
 
-    // Held exclusive during the final metadata swap in merge_deletes + reload.
-    // Acquired in merge_deletes; released in reload. Callers that invoke reload
-    // again (e.g. after copy_index in the double-version path) must re-acquire.
-    // Writer-first, so a merge's swap gets in while searches keep taking it shared.
+    /** @brief Held exclusive during the final metadata swap in merge_deletes and reload, acquired in
+     *  merge_deletes and released in reload; callers that reload again (the double-version path
+     *  after copy_index) re-acquire it; writer-first, so a merge's swap gets in while searches keep
+     *  taking it shared, and CONDA's entry switch takes it too */
     WriterFirstMutex merge_lock;
 
    private:

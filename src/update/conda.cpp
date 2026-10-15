@@ -45,6 +45,21 @@ namespace pipeann {
     return a.distance < b.distance || (a.distance == b.distance && a.id < b.id);
   }
 
+  /** @brief A thread's PQ scratch for condadist, freed at thread exit as a bench starts fresh
+   *  worker threads for every run */
+  struct CondaScratch {
+    uint8_t *bytes = nullptr;
+    /** @brief Free the scratch */
+    ~CondaScratch();
+  };
+
+  CondaScratch::~CondaScratch() {
+    // [1]
+    if (bytes != nullptr) {
+      pipeann::aligned_free(bytes);
+    }
+  }
+
   template<typename T, typename TagT>
   void SSDIndex<T, TagT>::condaload(const std::string &base, uint64_t capacity, uint32_t entry) {
     // [1]
@@ -146,7 +161,7 @@ namespace pipeann {
     // [1]
     std::vector<uint32_t> want;
     for (uint32_t id : ids) {
-      if (id < stored.size() && stored[id] && op.lists.find(id) == op.lists.end()) {
+      if (id < stored.size() && op.lists.find(id) == op.lists.end()) {
         want.push_back(id);
       }
     }
@@ -155,10 +170,17 @@ namespace pipeann {
     void *ctx = reader->get_ctx();
     for (uint64_t st = 0; st < want.size(); st += CONDA_CHUNK) {
       const uint64_t ed = std::min<uint64_t>(want.size(), st + CONDA_CHUNK);
-      std::vector<uint32_t> part(want.begin() + st, want.begin() + ed);
+      std::vector<uint32_t> asked(want.begin() + st, want.begin() + ed);
       // [2]
-      auto locked = lock_idx(idx_lock_table, kInvalidID, part, true);
-      char *buf = (char *) reader->alloc_io_buf(part.size() * io_size, SECTOR_LEN);
+      auto locked = lock_idx(idx_lock_table, kInvalidID, asked, true);
+      std::vector<uint32_t> part;
+      for (uint32_t id : asked) {
+        if (stored[id]) {
+          part.push_back(id);
+        }
+      }
+      const uint64_t bytes = std::max<uint64_t>(part.size(), 1) * io_size;
+      char *buf = (char *) reader->alloc_io_buf(bytes, SECTOR_LEN);
       std::vector<IORequest> reqs;
       std::vector<uint32_t> locs;
       for (uint64_t i = 0; i < part.size(); ++i) {
@@ -178,7 +200,7 @@ namespace pipeann {
         }
       }
       reader->deref(&refs);
-      reader->free_io_buf(buf, part.size() * io_size);
+      reader->free_io_buf(buf, bytes);
       unlock_idx(idx_lock_table, locked);
     }
   }
@@ -223,17 +245,10 @@ namespace pipeann {
       }
     }
     // [3]
-    // Freed at thread exit, as a bench starts fresh worker threads for every run.
-    static thread_local struct Scratch {
-      uint8_t *bytes = nullptr;
-      ~Scratch() {
-        if (bytes != nullptr) {
-          pipeann::aligned_free(bytes);
-        }
-      }
-    } scratch;
+    static thread_local CondaScratch scratch;
     if (scratch.bytes == nullptr) {
-      pipeann::alloc_aligned((void **) &scratch.bytes, 4 * AbstractNeighbor<T>::MAX_BYTES_PER_NBR, 256);
+      const uint64_t bytes = 4 * AbstractNeighbor<T>::MAX_BYTES_PER_NBR;
+      pipeann::alloc_aligned((void **) &scratch.bytes, bytes, 256);
     }
     float out = 0.0f;
     nbr_handler->compute_dists(first, &second, 1, &out, scratch.bytes);
@@ -664,22 +679,25 @@ namespace pipeann {
       condarepair(gone[i]);
     }
     // [3]
+    if (condagone.find(condaep) != condagone.end()) {
+      uint32_t entry = condaep;
+      for (uint64_t id = 0; id < condalive.size(); ++id) {
+        if (condalive[id]) {
+          entry = (uint32_t) id;
+          break;
+        }
+      }
+      std::lock_guard<WriterFirstMutex> swap(merge_lock);
+      condaep = entry;
+      meta_.entry_point = entry;
+      meta_.entry_point_id = entry;
+    }
+    // [4]
 #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
     for (int64_t i = 0; i < (int64_t) gone.size(); ++i) {
       condaclear(gone[i]);
       std::lock_guard<std::mutex> guard(condamu);
       condafree.push_back(gone[i]);
-    }
-    // [4]
-    if (condagone.find(condaep) != condagone.end()) {
-      for (uint64_t id = 0; id < condalive.size(); ++id) {
-        if (condalive[id]) {
-          condaep = (uint32_t) id;
-          break;
-        }
-      }
-      meta_.entry_point = condaep;
-      meta_.entry_point_id = condaep;
     }
     condagone.clear();
   }
@@ -697,15 +715,6 @@ namespace pipeann {
       crash();
     }
     void *ctx = reader->get_ctx();
-    std::vector<uint8_t> needold(n, 0);
-    for (uint64_t i = 0; i < n; ++i) {
-      bool list = false, vec = false;
-      for (auto &e : op.edits.find(ids[i])->second) {
-        list = list || e.token == 'S' || e.token == 'C';
-        vec = vec || e.token == 'V';
-      }
-      needold[i] = stored[ids[i]] && !(list && vec);
-    }
     // [2]
     std::set<uint64_t> hinted;
     std::vector<uint64_t> locs = alloc_loc((int) n, op.hints, hinted);
@@ -720,6 +729,15 @@ namespace pipeann {
     auto plocked = pipeann::lockReqs(page_lock_table, plock);
     lock_vec(vec_lock_table, kInvalidID, ids);
     // [3]
+    std::vector<uint8_t> needold(n, 0);
+    for (uint64_t i = 0; i < n; ++i) {
+      bool list = false, vec = false;
+      for (auto &e : op.edits.find(ids[i])->second) {
+        list = list || e.token == 'S' || e.token == 'C';
+        vec = vec || e.token == 'V';
+      }
+      needold[i] = stored[ids[i]] && !(list && vec);
+    }
     std::set<uint64_t> toread;
     for (auto &kv : owned) {
       for (uint32_t held : get_page_layout((uint32_t) kv.first)) {
@@ -783,8 +801,12 @@ namespace pipeann {
       }
       if (list.size() > meta_.range) {
         LOG(WARNING) << "CONDA list of " << id << " holds " << list.size() << " past "
-                     << meta_.range;
-        list.resize(meta_.range);
+                     << meta_.range << ", alpha-pruned";
+        std::vector<Neighbor> pool;
+        for (uint32_t x : list) {
+          pool.push_back(Neighbor(x, condadist(id, x, op), true));
+        }
+        condaalpha(id, pool, kInvalidID, list, op);
       }
       DiskNode<T> dst = node_from_page(slot[loc_sector_no(locs[i])], locs[i]);
       memset((char *) dst.coords, 0, meta_.max_node_len);

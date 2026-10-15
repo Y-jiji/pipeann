@@ -317,7 +317,6 @@ namespace pipeann {
         n_tasks = 0;
       }
     }
-    // stop_bg_io ends this thread, and its io_uring context would leak with it.
     reader->deregister_thread();
   }
 
