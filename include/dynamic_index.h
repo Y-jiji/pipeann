@@ -105,6 +105,7 @@ class DynamicIndex : public BaseDynamicIndex {
   // Beam width of query search, i.e. how many records a hop reads at once,
   // 4 by default as OdinANN (FAST '26) evaluates; a search reads it once.
   void set_search_beam_width(uint32_t width) { search_beam_width_.store(width, std::memory_order_relaxed); }
+  uint32_t search_beam_width() const { return search_beam_width_.load(std::memory_order_relaxed); }
 
   // Beam widths of the insert search and of CONDA's delete repair search;
   // call while no insert or delete runs.
