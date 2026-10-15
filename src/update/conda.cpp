@@ -729,6 +729,11 @@ namespace pipeann {
       LOG(ERROR) << "CONDA needs records that share pages";
       crash();
     }
+    uint8_t token = condaslots.pop();
+    while (token == 0) {
+      condaslots.wait_for_push_notify();
+      token = condaslots.pop();
+    }
     void *ctx = reader->get_ctx();
     // [2]
     std::set<uint64_t> hinted;
@@ -862,8 +867,9 @@ namespace pipeann {
     }
     erase_and_set_loc(freed, locs, ids);
     unlock_idx(idx_lock_table, ilocked);
-    // [6] the background writer writes the pages, then releases their locks, references and buffer, as an
-    // OdinANN insert's; meanwhile reads find the pages' new contents in the page cache wbc_write filled
+    // [6] the background writer writes the pages, then releases their locks, references, buffer and the
+    // queue slot [1] took, as an OdinANN insert's; meanwhile reads find the pages' new contents in the page
+    // cache wbc_write filled
     unlock_vec(vec_lock_table, kInvalidID, ids);
     reader->deref(&rrefs);
     const uint64_t written = owned.size();

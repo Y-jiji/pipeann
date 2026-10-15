@@ -121,6 +121,7 @@ namespace pipeann {
       this->init_query_buf(*data);
       this->thread_data_bufs.push_back(data);
       this->thread_data_queue.push(data);
+      this->condaslots.push(1);
       this->reader->register_buf(data->sector_scratch, MAX_N_SECTOR_READS * SECTOR_LEN, 0);
     }
   }
@@ -140,6 +141,8 @@ namespace pipeann {
       this->thread_data_bufs.pop_back();
       this->thread_data_queue.pop();
       delete buf;
+    }
+    while (this->condaslots.pop() != 0) {
     }
   }
 

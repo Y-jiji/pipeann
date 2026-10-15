@@ -314,7 +314,8 @@ namespace pipeann {
       uint64_t *close = nullptr;
       uint64_t begun = 0;
       bool terminate = false;
-      // A task with no thread_data (a CONDA flush) owns the io buffer its writes point into, freed once written.
+      // A task with no thread_data (a CONDA flush) owns the io buffer its writes point into and a condaslots
+      // token, freed and returned once written.
       char *buf = nullptr;
       uint64_t buflen = 0;
     };
@@ -422,6 +423,10 @@ namespace pipeann {
     std::shared_mutex condagate;
     /** @brief 1 while a batch's first insert is due, 2 while it runs, else 0 */
     std::atomic<int> condafresh{0};
+    /** @brief CONDA's queue slots, a token per query buffer: a flush takes one before it locks anything
+     *  and the background writer returns it once that flush is written, so queued flushes stay as bounded
+     *  as OdinANN's inserts, each holding its query buffer until written */
+    ConcurrentQueue<uint8_t> condaslots = ConcurrentQueue<uint8_t>(0);
 
     void init_buffers(uint64_t nthreads);
     void destroy_buffers();

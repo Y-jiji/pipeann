@@ -322,6 +322,8 @@ namespace pipeann {
         this->push_query_buf(task->thread_data);
       } else {
         reader->free_io_buf(task->buf, task->buflen);
+        this->condaslots.push(1);
+        this->condaslots.push_notify_all();
       }
       delete task;
       ++n_tasks;
