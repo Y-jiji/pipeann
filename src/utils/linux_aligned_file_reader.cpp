@@ -777,8 +777,11 @@ void LinuxAlignedFileReader::poll_alloc(void *ctx, std::vector<uint64_t> *page_r
 
 #include <libaio.h>
 #include <cassert>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <iostream>
 #include "aligned_file_reader.h"
 #include "utils/tsl/robin_map.h"
@@ -788,6 +791,35 @@ void LinuxAlignedFileReader::poll_alloc(void *ctx, std::vector<uint64_t> *page_r
 namespace {
   typedef struct io_event io_event_t;
   typedef struct iocb iocb_t;
+
+  // A poll that has seen PIPEANN_POLL_SPINS empty polls in a row on this thread waits up to POLL_WAIT_NS for
+  // one completion instead, so a thread with nothing but waiting to do yields its core; unset or 0 keeps
+  // PipeANN's pure spin-polling.
+  constexpr long POLL_WAIT_NS = 100000;
+
+  int poll_spins() {
+    static const int spins = [] {
+      const char *text = std::getenv("PIPEANN_POLL_SPINS");
+      return text != nullptr ? std::atoi(text) : 0;
+    }();
+    return spins;
+  }
+
+  int get_events(io_context_t ctx, io_event_t *evts) {
+    static thread_local int empty = 0;
+    int ret;
+    if (poll_spins() > 0 && empty >= poll_spins()) {
+      timespec wait{0, POLL_WAIT_NS};
+      ret = io_getevents(ctx, 1, MAX_EVENTS, evts, &wait);
+      if (ret == -EINTR) {
+        ret = 0;
+      }
+    } else {
+      ret = io_getevents(ctx, 0, MAX_EVENTS, evts, nullptr);
+    }
+    empty = ret > 0 ? 0 : empty + 1;
+    return ret;
+  }
 
   void execute_io(void *ctx, int fd, std::vector<IORequest> &reqs, uint64_t n_retries = 0, bool write = false) {
     // break-up requests into chunks of size MAX_EVENTS each
@@ -988,7 +1020,7 @@ int LinuxAlignedFileReader::poll(void *ctx) {
   // Poll a single completed IO request in the io_uring context.
   static __thread io_event_t evts[MAX_EVENTS]; 
   io_context_t io_ctx = (io_context_t) ctx;
-  int ret = io_getevents(io_ctx, 0, MAX_EVENTS, evts, nullptr);
+  int ret = get_events(io_ctx, evts);
   if (ret < 0) {
     LOG(ERROR) << "io_getevents() failed; returned " << ret << ", errno=" << errno << ":" << ::strerror(errno);
     return 0;
@@ -1006,7 +1038,7 @@ int LinuxAlignedFileReader::poll(void *ctx) {
 void LinuxAlignedFileReader::poll_alloc(void *ctx, std::vector<uint64_t> *page_ref) {
   static __thread io_event_t evts[MAX_EVENTS];
   io_context_t io_ctx = (io_context_t) ctx;
-  int ret = io_getevents(io_ctx, 0, MAX_EVENTS, evts, nullptr);
+  int ret = get_events(io_ctx, evts);
   if (ret < 0) {
     LOG(ERROR) << "io_getevents() failed; returned " << ret << ", errno=" << errno << ":" << ::strerror(errno);
     return;
