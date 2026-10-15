@@ -154,12 +154,17 @@ namespace pipeann {
 
   template<typename T, typename TagT>
   void SSDIndex<T, TagT>::stop_bg_io() {
+    // One terminate task per running thread first, as any thread may take any of them, then join them all.
     for (int i = 0; i < kBgIOThreads; ++i) {
       if (bg_io_thread_[i] != nullptr) {
         auto bg_task = new BgTask{
             .thread_data = nullptr, .writes = {}, .pages_to_unlock = {}, .pages_to_deref = {}, .terminate = true};
         bg_tasks.push(bg_task);
-        bg_tasks.push_notify_all();
+      }
+    }
+    bg_tasks.push_notify_all();
+    for (int i = 0; i < kBgIOThreads; ++i) {
+      if (bg_io_thread_[i] != nullptr) {
         bg_io_thread_[i]->join();
         delete bg_io_thread_[i];
         bg_io_thread_[i] = nullptr;

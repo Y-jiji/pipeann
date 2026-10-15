@@ -340,7 +340,10 @@ namespace pipeann {
 
     using PageArr = std::vector<uint32_t>;
 
-    static constexpr int kBgIOThreads = 1;
+#ifndef PIPEANN_BG_IO_THREADS
+#define PIPEANN_BG_IO_THREADS 1
+#endif
+    static constexpr int kBgIOThreads = PIPEANN_BG_IO_THREADS;
 
     // Derived/runtime metadata not stored in SSDIndexMetadata.
     uint64_t aligned_dim = 0;
