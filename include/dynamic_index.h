@@ -470,6 +470,15 @@ class DynamicIndex : public BaseDynamicIndex {
     mem_index_->lazy_delete(tag);
   }
 
+  /**
+   * @brief Tags lazily deleted since the last save took its snapshot, which the next save merges
+   * @return how many are pending
+   */
+  size_t pending_deletes() {
+    auto gone = std::lock_guard<std::mutex>(deletemu);
+    return deleted_nodes_.size();
+  }
+
   // Bulk remove.
   void remove(const TagT *tags, uint32_t n_tags) {
     auto mu = std::shared_lock<std::shared_mutex>(save_mu_, std::defer_lock);
