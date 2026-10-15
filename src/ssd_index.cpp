@@ -653,6 +653,16 @@ namespace pipeann {
     return t;
   }
 
+  // A mapping slot is read and written by threads holding only the shared resize lock (or alloc_lock),
+  // so single slots go through relaxed atomics; the vector itself only grows under the exclusive lock.
+  static inline uint32_t slotload(const uint32_t *slot) {
+    return __atomic_load_n(slot, __ATOMIC_RELAXED);
+  }
+
+  static inline void slotstore(uint32_t *slot, uint32_t value) {
+    __atomic_store_n(slot, value, __ATOMIC_RELAXED);
+  }
+
   template<typename T, typename TagT>
   uint32_t SSDIndex<T, TagT>::id2loc(uint32_t id) {
 #ifdef NO_MAPPING
@@ -664,7 +674,7 @@ namespace pipeann {
       crash();
       return kInvalidID;
     }
-    uint32_t ret = id2loc_[id];
+    uint32_t ret = slotload(&id2loc_[id]);
     id2loc_resize_mu_.unlock_shared();
     return ret;
 #endif
@@ -675,20 +685,21 @@ namespace pipeann {
 #ifdef NO_MAPPING
     return;
 #else
-    if (unlikely(id >= id2loc_.size())) {
-      id2loc_resize_mu_.lock();
-      if (likely(id >= id2loc_.size())) {
-        id2loc_.resize(1.5 * id);
-        LOG(INFO) << "Resize id2loc_ to " << id2loc_.size();
-      }
-      id2loc_resize_mu_.unlock();
-    }
-    // Here, we do not grab any locks. But no matter:
-    // Here, the id2loc_.size() must > id (as it only increases).
-    // So, we only need to ensure that no concurrent resize happens (use-after-free).
+    // The size is only read under the resize lock: a lock-free read races a reallocation.
     id2loc_resize_mu_.lock_shared();
-    id2loc_[id] = loc;
+    if (likely(id < id2loc_.size())) {
+      slotstore(&id2loc_[id], loc);
+      id2loc_resize_mu_.unlock_shared();
+      return;
+    }
     id2loc_resize_mu_.unlock_shared();
+    id2loc_resize_mu_.lock();
+    if (id >= id2loc_.size()) {
+      id2loc_.resize(std::max<uint64_t>(id + 1, 1.5 * id));
+      LOG(INFO) << "Resize id2loc_ to " << id2loc_.size();
+    }
+    slotstore(&id2loc_[id], loc);
+    id2loc_resize_mu_.unlock();
 #endif
   }
 
@@ -704,39 +715,43 @@ namespace pipeann {
   template<typename T, typename TagT>
   uint32_t SSDIndex<T, TagT>::loc2id(uint32_t loc) {
     loc2id_resize_mu_.lock_shared();
-    if (unlikely(loc > loc2id_.size())) {
+    if (unlikely(loc >= loc2id_.size())) {
       LOG(ERROR) << "loc " << loc << " is out of range " << loc2id_.size();
       crash();
       return kInvalidID;
     }
-    uint32_t ret = loc2id_[loc];
+    uint32_t ret = slotload(&loc2id_[loc]);
     loc2id_resize_mu_.unlock_shared();
     return ret;
   }
 
   template<typename T, typename TagT>
   void SSDIndex<T, TagT>::set_loc2id(uint32_t loc, uint32_t id) {
-    if (unlikely(loc >= loc2id_.size())) {
-      loc2id_resize_mu_.lock();
-      if (likely(loc >= loc2id_.size())) {
-        loc2id_.resize(1.5 * loc);
-        LOG(INFO) << "Resize loc2id_ to " << loc2id_.size();
-      }
-      loc2id_resize_mu_.unlock();
-    }
+    // The size is only read under the resize lock: a lock-free read races a reallocation.
     loc2id_resize_mu_.lock_shared();
-    loc2id_[loc] = id;
+    if (likely(loc < loc2id_.size())) {
+      slotstore(&loc2id_[loc], id);
+      loc2id_resize_mu_.unlock_shared();
+      return;
+    }
     loc2id_resize_mu_.unlock_shared();
+    loc2id_resize_mu_.lock();
+    if (loc >= loc2id_.size()) {
+      loc2id_.resize(std::max<uint64_t>(loc + 1, 1.5 * loc));
+      LOG(INFO) << "Resize loc2id_ to " << loc2id_.size();
+    }
+    slotstore(&loc2id_[loc], id);
+    loc2id_resize_mu_.unlock();
   }
 
   template<typename T, typename TagT>
   void SSDIndex<T, TagT>::erase_loc2id(uint32_t loc) {
     loc2id_resize_mu_.lock_shared();
-    loc2id_[loc] = kInvalidID;
+    slotstore(&loc2id_[loc], kInvalidID);
     uint32_t st = sector_to_loc(loc_sector_no(loc), 0);
     bool empty = true;
     for (uint32_t i = st; i < st + meta_.nnodes_per_sector; ++i) {
-      if (loc2id_[i] != kInvalidID) {
+      if (slotload(&loc2id_[i]) != kInvalidID) {
         empty = false;
         break;
       }
@@ -857,7 +872,7 @@ namespace pipeann {
     auto st = sector_to_loc(page_no, 0);
     auto ed = meta_.nnodes_per_sector == 0 ? st + 1 : st + meta_.nnodes_per_sector;
     for (uint32_t i = st; i < ed; ++i) {
-      ret.push_back(loc2id_[i]);
+      ret.push_back(slotload(&loc2id_[i]));
     }
     loc2id_resize_mu_.unlock_shared();
     return ret;
@@ -914,11 +929,15 @@ namespace pipeann {
       auto st = sector_to_loc(empty_page, 0);
       auto ed = meta_.nnodes_per_sector == 0 ? st + 1 : st + meta_.nnodes_per_sector;
       // A hint may have taken the page's slots since it was queued; it is queued again once empty.
-      if (std::any_of(loc2id_.begin() + st, loc2id_.begin() + ed, [](uint32_t id) { return id != kInvalidID; })) {
+      bool taken = false;
+      for (uint32_t i = st; i < ed && !taken; ++i) {
+        taken = slotload(&loc2id_[i]) != kInvalidID;
+      }
+      if (taken) {
         continue;
       }
       for (uint32_t i = st; i < ed; ++i) {
-        loc2id_[i] = kAllocatedID;
+        slotstore(&loc2id_[i], kAllocatedID);
         ret.push_back(i);
         ++cur;
         if (cur == n) {
@@ -939,7 +958,7 @@ namespace pipeann {
       auto st = sector_to_loc(p, 0);
       auto ed = meta_.nnodes_per_sector == 0 ? st + 1 : st + meta_.nnodes_per_sector;
       for (uint32_t i = st; i < ed; ++i) {
-        if (loc2id_[i] == kInvalidID) {
+        if (slotload(&loc2id_[i]) == kInvalidID) {
           cnt++;
         }
       }
@@ -951,8 +970,8 @@ namespace pipeann {
         page_need_to_read.insert(p);
       }
       for (uint32_t i = st; i < ed; ++i) {
-        if (loc2id_[i] == kInvalidID) {
-          loc2id_[i] = kAllocatedID;
+        if (slotload(&loc2id_[i]) == kInvalidID) {
+          slotstore(&loc2id_[i], kAllocatedID);
           ret.push_back(i);
           ++cur;
           if (cur == n) {
