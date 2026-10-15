@@ -830,10 +830,24 @@ namespace pipeann {
       dst.n_dense_nbrs = 0;
       memcpy(dst.nbrs, list.data(), list.size() * sizeof(uint32_t));
     }
-    // [5]
+    // [5] the written pages' 4k writes, runs of consecutive pages merged into one continuous write as an
+    // OdinANN insert's; owned is ordered and consecutive pages sit next to each other in buf
     std::vector<IORequest> writes;
+    uint64_t run = 0, last = 0;
     for (auto &kv : owned) {
-      writes.push_back(IORequest(kv.first * SECTOR_LEN, io_size, slot[kv.first], 0, 0));
+      const uint64_t off = kv.first * SECTOR_LEN;
+      if (writes.empty() || off != last + io_size) {
+        if (!writes.empty()) {
+          writes.back().len = run * io_size;
+        }
+        run = 0;
+        writes.push_back(IORequest(off, io_size, slot[kv.first], 0, 0));
+      }
+      ++run;
+      last = off;
+    }
+    if (!writes.empty()) {
+      writes.back().len = run * io_size;
     }
     std::vector<uint64_t> wrefs;
     reader->wbc_write(writes, ctx, &wrefs);
