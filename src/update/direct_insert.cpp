@@ -9,6 +9,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <pthread.h>
+#include <sched.h>
 #include <limits>
 #include <tuple>
 #include "utils/timer.h"
@@ -275,6 +278,13 @@ namespace pipeann {
 
   template<class T, class TagT>
   void SSDIndex<T, TagT>::bg_io_thread() {
+    // Pinned to the CPU PIPEANN_BG_IO_CPU names, if set, so the writer can own a core no worker shares.
+    if (const char *cpu = std::getenv("PIPEANN_BG_IO_CPU")) {
+      cpu_set_t set;
+      CPU_ZERO(&set);
+      CPU_SET(std::atoi(cpu), &set);
+      pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+    }
     auto ctx = reader->get_ctx();
     auto timer = pipeann::Timer();
     uint64_t n_tasks = 0;
