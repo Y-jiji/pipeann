@@ -548,17 +548,12 @@ namespace pipeann {
       condaedit(id, CondaEdit{'S', 0, own}, op);
       // [4]
       condalink(id, expanded, pruned, maxid, op);
-      const uint64_t written = condaflush(op);
+      // the background writer sets pages and close once the flush's pages are written, as for an OdinANN insert
+      const uint64_t written = condaflush(op, pages, close, begun);
       reader->deref(&op.pages);
       if (stats != nullptr) {
         stats->n_out_edges = own.size();
         stats->n_pages_touched = written;
-      }
-      if (pages != nullptr) {
-        *pages = written;
-      }
-      if (close != nullptr) {
-        *close = (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count() - begun;
       }
       return (int) id;
     };
@@ -717,11 +712,17 @@ namespace pipeann {
   }
 
   template<typename T, typename TagT>
-  uint64_t SSDIndex<T, TagT>::condaflush(CondaOp &op) {
+  uint64_t SSDIndex<T, TagT>::condaflush(CondaOp &op, uint64_t *pages, uint64_t *close, uint64_t begun) {
     // [1]
     const std::vector<uint32_t> ids = op.dirty;
     const uint64_t n = ids.size();
     if (n == 0) {
+      if (pages != nullptr) {
+        *pages = 0;
+      }
+      if (close != nullptr) {
+        *close = (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count() - begun;
+      }
       return 0;
     }
     if (meta_.nnodes_per_sector == 0) {
@@ -856,6 +857,9 @@ namespace pipeann {
                              .writes = std::move(writes),
                              .pages_to_unlock = std::move(plocked),
                              .pages_to_deref = std::move(wrefs),
+                             .pages = pages,
+                             .close = close,
+                             .begun = begun,
                              .buf = buf,
                              .buflen = all.size() * io_size});
     bg_tasks.push_notify_all();

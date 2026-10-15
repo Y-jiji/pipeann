@@ -630,11 +630,15 @@ namespace pipeann {
 
     /**
      * @brief Write the op's dirty records relocated onto shared pages, each re-read under its lock
-     *  and its edits replayed on it; SHAME(TALLFUNC)
+     *  and its edits replayed on it, the writes left to the background writer; SHAME(TALLFUNC)
      * @param op the operation
+     * @param pages set by the background writer to the pages it wrote, null for none
+     * @param close set by the background writer to the steady_clock ns past begun when written
+     * @param begun steady_clock ns at which the caller's insert began
      * @return pages written
      */
-    uint64_t condaflush(CondaOp &op);
+    uint64_t condaflush(CondaOp &op, uint64_t *pages = nullptr, uint64_t *close = nullptr,
+                        uint64_t begun = 0);
 
     // Background I/O thread function.
     void bg_io_thread();
