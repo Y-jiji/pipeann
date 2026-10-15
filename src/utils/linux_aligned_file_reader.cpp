@@ -471,7 +471,7 @@ void LinuxAlignedFileReader::poll_alloc(void *ctx, std::vector<uint64_t> *page_r
       req->finished = true;
       for (uint64_t i = 0; i < req->len / SECTOR_LEN; i++) {
         uint32_t blk_no = req->offset / SECTOR_LEN + i;
-        pipeann::cache.put(pipeann::PageCacheKey(fd, blk_no), (uint8_t *) req->buf + i * SECTOR_LEN, true);
+        pipeann::cache.fill(pipeann::PageCacheKey(fd, blk_no), (uint8_t *) req->buf + i * SECTOR_LEN, true);
         page_ref->push_back(pipeann::PageCacheKey(fd, blk_no).raw);
       }
     }
@@ -764,7 +764,7 @@ void LinuxAlignedFileReader::poll_alloc(void *ctx, std::vector<uint64_t> *page_r
       req->finished = true;
       for (uint64_t i = 0; i < req->len / SECTOR_LEN; i++) {
         uint32_t blk_no = req->offset / SECTOR_LEN + i;
-        pipeann::cache.put(pipeann::PageCacheKey(fd, blk_no), (uint8_t *) req->buf + i * SECTOR_LEN, true);
+        pipeann::cache.fill(pipeann::PageCacheKey(fd, blk_no), (uint8_t *) req->buf + i * SECTOR_LEN, true);
         page_ref->push_back(pipeann::PageCacheKey(fd, blk_no).raw);
       }
     }
@@ -1017,7 +1017,7 @@ void LinuxAlignedFileReader::poll_alloc(void *ctx, std::vector<uint64_t> *page_r
       req->finished = true;
       for (uint64_t j = 0; j < req->len / SECTOR_LEN; j++) {
         uint32_t blk_no = req->offset / SECTOR_LEN + j;
-        pipeann::cache.put(pipeann::PageCacheKey(fd, blk_no), (uint8_t *) req->buf + j * SECTOR_LEN, true);
+        pipeann::cache.fill(pipeann::PageCacheKey(fd, blk_no), (uint8_t *) req->buf + j * SECTOR_LEN, true);
         page_ref->push_back(pipeann::PageCacheKey(fd, blk_no).raw);
       }
     }
@@ -1095,7 +1095,7 @@ void LinuxAlignedFileReader::read_alloc(std::vector<IORequest> &read_reqs, void 
     for (auto &req : disk_read_reqs) {
       for (uint64_t i = 0; i < req.len / SECTOR_LEN; i++) {
         uint32_t blk_no = req.offset / SECTOR_LEN + i;
-        pipeann::cache.put(pipeann::PageCacheKey(fd, blk_no), (uint8_t *) req.buf + i * SECTOR_LEN, true);
+        pipeann::cache.fill(pipeann::PageCacheKey(fd, blk_no), (uint8_t *) req.buf + i * SECTOR_LEN, true);
       }
     }
 

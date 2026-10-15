@@ -69,6 +69,22 @@ namespace pipeann {
       });
     }
 
+    // Cache a page just read from disk. An entry already there is newer than the disk (a write puts
+    // it before its disk write lands), so it is kept and copied back into value instead.
+    bool fill(PageCacheKey key, uint8_t *value, bool ref = false) {
+      return cache.upsert(key.raw, [&](PageCacheItem &v, libcuckoo::UpsertContext ctx) {
+        if (ctx == libcuckoo::UpsertContext::NEWLY_INSERTED) {
+          v = PageCacheItem{.buf = new uint8_t[SECTOR_LEN], .ref_cnt = 0};
+          memcpy(v.buf, value, SECTOR_LEN);
+        } else {
+          memcpy(value, v.buf, SECTOR_LEN);
+        }
+        if (ref) {
+          v.ref();
+        }
+      });
+    }
+
     bool deref(PageCacheKey key) {
       bool ret = cache.uprase_fn(key.raw, [&](PageCacheItem &v, libcuckoo::UpsertContext ctx) {
         if (ctx == libcuckoo::UpsertContext::NEWLY_INSERTED) {
