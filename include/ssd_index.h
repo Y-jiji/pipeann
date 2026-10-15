@@ -314,6 +314,9 @@ namespace pipeann {
       uint64_t *close = nullptr;
       uint64_t begun = 0;
       bool terminate = false;
+      // A task with no thread_data (a CONDA flush) owns the io buffer its writes point into, freed once written.
+      char *buf = nullptr;
+      uint64_t buflen = 0;
     };
 
     /** @brief Seeding of a CONDA walk: non-lazy insert, lazy insert, or repair of a deleted vertex */

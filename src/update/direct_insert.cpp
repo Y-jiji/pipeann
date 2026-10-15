@@ -311,12 +311,18 @@ namespace pipeann {
         uint64_t done = (uint64_t) std::chrono::steady_clock::now().time_since_epoch().count();
         *task->close = done - task->begun;
       }
-      reader->free_io_buf(task->thread_data->update_buf, UPDATE_BUF_SIZE);
-      task->thread_data->update_buf = nullptr;
+      if (task->thread_data != nullptr) {
+        reader->free_io_buf(task->thread_data->update_buf, UPDATE_BUF_SIZE);
+        task->thread_data->update_buf = nullptr;
+      }
 
       pipeann::unlockReqs(this->page_lock_table, task->pages_to_unlock);
       reader->deref(&task->pages_to_deref);
-      this->push_query_buf(task->thread_data);
+      if (task->thread_data != nullptr) {
+        this->push_query_buf(task->thread_data);
+      } else {
+        reader->free_io_buf(task->buf, task->buflen);
+      }
       delete task;
       ++n_tasks;
 

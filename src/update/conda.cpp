@@ -836,11 +836,6 @@ namespace pipeann {
     }
     std::vector<uint64_t> wrefs;
     reader->wbc_write(writes, ctx, &wrefs);
-    for (uint64_t st = 0; st < writes.size(); st += CONDA_CHUNK) {
-      const uint64_t ed = std::min<uint64_t>(writes.size(), st + CONDA_CHUNK);
-      std::vector<IORequest> part(writes.begin() + st, writes.begin() + ed);
-      reader->write(part, ctx);
-    }
     auto ilocked = lock_idx(idx_lock_table, kInvalidID, ids);
     std::vector<uint64_t> freed;
     for (uint64_t i = 0; i < n; ++i) {
@@ -852,13 +847,19 @@ namespace pipeann {
     }
     erase_and_set_loc(freed, locs, ids);
     unlock_idx(idx_lock_table, ilocked);
-    // [6]
+    // [6] the background writer writes the pages, then releases their locks, references and buffer, as an
+    // OdinANN insert's; meanwhile reads find the pages' new contents in the page cache wbc_write filled
     unlock_vec(vec_lock_table, kInvalidID, ids);
-    pipeann::unlockReqs(page_lock_table, plocked);
     reader->deref(&rrefs);
-    reader->deref(&wrefs);
-    reader->free_io_buf(buf, all.size() * io_size);
-    return owned.size();
+    const uint64_t written = owned.size();
+    bg_tasks.push(new BgTask{.thread_data = nullptr,
+                             .writes = std::move(writes),
+                             .pages_to_unlock = std::move(plocked),
+                             .pages_to_deref = std::move(wrefs),
+                             .buf = buf,
+                             .buflen = all.size() * io_size});
+    bg_tasks.push_notify_all();
+    return written;
   }
 
   template class SSDIndex<float>;
