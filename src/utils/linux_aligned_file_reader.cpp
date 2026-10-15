@@ -811,11 +811,12 @@ namespace {
     if (poll_spins() > 0 && empty >= poll_spins()) {
       timespec wait{0, POLL_WAIT_NS};
       ret = io_getevents(ctx, 1, MAX_EVENTS, evts, &wait);
-      if (ret == -EINTR) {
-        ret = 0;
-      }
     } else {
       ret = io_getevents(ctx, 0, MAX_EVENTS, evts, nullptr);
+    }
+    // an interrupted poll (EINTR, e.g. a ptrace stop) reaped nothing
+    if (ret == -EINTR) {
+      ret = 0;
     }
     empty = ret > 0 ? 0 : empty + 1;
     return ret;
@@ -846,27 +847,35 @@ namespace {
         cbs[i] = cb.data() + i;
       }
 
-      uint64_t n_tries = 0;
-      while (n_tries <= n_retries) {
-        // issue reads
-        int64_t ret = io_submit((io_context_t) ctx, (int64_t) n_ops, cbs.data());
-        // if requests didn't get accepted
-        if (ret != (int64_t) n_ops) {
-          LOG(ERROR) << "io_submit() failed; returned " << ret << ", expected=" << n_ops << ", ernno=" << errno << "="
-                     << ::strerror((int) -ret) << ", try #" << n_tries + 1 << " ctx: " << ctx << "\n";
-          exit(-1);
-        } else {
-          // wait on io_getevents
-          ret = io_getevents((io_context_t) ctx, (int64_t) n_ops, (int64_t) n_ops, evts.data(), nullptr);
-          // if requests didn't complete
-          if (ret != (int64_t) n_ops) {
-            LOG(ERROR) << "io_getevents() failed; returned " << ret << ", expected=" << n_ops << ", ernno=" << errno
-                       << "=" << ::strerror((int) -ret) << ", try #" << n_tries + 1;
-            exit(-1);
-          } else {
-            break;
-          }
+      // Submit every iocb and reap every completion, resuming after an interrupted (EINTR, e.g. a ptrace stop) or
+      // short call with the rest only: a request is never submitted twice and never left in flight.
+      (void) n_retries;
+      uint64_t sent = 0;
+      while (sent < n_ops) {
+        int64_t ret = io_submit((io_context_t) ctx, (int64_t) (n_ops - sent), cbs.data() + sent);
+        if (ret == -EINTR) {
+          continue;
         }
+        if (ret <= 0) {
+          LOG(ERROR) << "io_submit() failed; returned " << ret << ", expected=" << n_ops - sent << ", "
+                     << ::strerror((int) -ret) << " ctx: " << ctx;
+          exit(-1);
+        }
+        sent += (uint64_t) ret;
+      }
+      uint64_t got = 0;
+      while (got < n_ops) {
+        int64_t ret = io_getevents((io_context_t) ctx, (int64_t) (n_ops - got), (int64_t) (n_ops - got),
+                                   evts.data() + got, nullptr);
+        if (ret == -EINTR) {
+          continue;
+        }
+        if (ret <= 0) {
+          LOG(ERROR) << "io_getevents() failed; returned " << ret << ", expected=" << n_ops - got << ", "
+                     << ::strerror((int) -ret);
+          exit(-1);
+        }
+        got += (uint64_t) ret;
       }
     }
   }
