@@ -49,7 +49,7 @@ namespace pipeann {
     rabitqlib::ex_ipfunc ex_ip_func_ = nullptr;
 
    public:
-    RaBitQNeighbor<T, BITS>(pipeann::Metric metric) : AbstractNeighbor<T>(metric) {
+    RaBitQNeighbor(pipeann::Metric metric) : AbstractNeighbor<T>(metric) {
       distance = get_distance_function<float>(metric);
       rabitq_metric = metric == INNER_PRODUCT ? rabitqlib::MetricType::METRIC_IP : rabitqlib::MetricType::METRIC_L2;
       if constexpr (HAS_EX) {
@@ -57,7 +57,7 @@ namespace pipeann {
       }
     }
 
-    ~RaBitQNeighbor<T, BITS>() {
+    ~RaBitQNeighbor() {
       if (rotator_ != nullptr) {
         delete rotator_;
         rotator_ = nullptr;
