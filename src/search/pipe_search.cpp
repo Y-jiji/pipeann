@@ -31,7 +31,7 @@ namespace pipeann {
     std::vector<Neighbor> expanded_nodes_info;
     if (params.conda != 0) {
       auto untombed = [this](unsigned id) -> bool {
-        return id >= condahead.size() || condahead[id] != 2;
+        return id >= condahead.size() || __atomic_load_n(&condahead[id], __ATOMIC_RELAXED) != 2;
       };
       auto always_valid = [](unsigned, const DiskNode<T> &) -> bool { return true; };
       this->pipe_search_common(query, mem_L, l_search, l_search, beam_width, io_size, false, untombed,

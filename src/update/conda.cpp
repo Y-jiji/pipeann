@@ -117,10 +117,20 @@ namespace pipeann {
     return list;
   }
 
+  // Searches read a node's tombstone flag while an insert or a delete sets it, so a single flag goes
+  // through relaxed atomics.
+  static inline uint8_t headload(const uint8_t *flag) {
+    return __atomic_load_n(flag, __ATOMIC_RELAXED);
+  }
+
+  static inline void headstore(uint8_t *flag, uint8_t value) {
+    __atomic_store_n(flag, value, __ATOMIC_RELAXED);
+  }
+
   template<typename T, typename TagT>
   bool SSDIndex<T, TagT>::condadead(uint32_t id) {
     // [1]
-    return id < condahead.size() && condahead[id] != 0;
+    return id < condahead.size() && headload(&condahead[id]) != 0;
   }
 
   template<typename T, typename TagT>
@@ -234,8 +244,11 @@ namespace pipeann {
   template<typename T, typename TagT>
   float SSDIndex<T, TagT>::condadist(uint32_t first, uint32_t second, CondaOp &op) {
     // [1]
-    if (std::is_floating_point<T>::value && (condahead[first] == 2 || condahead[second] == 2)) {
-      return condahead[first] == condahead[second] ? 0.0f : std::numeric_limits<float>::infinity();
+    if (std::is_floating_point<T>::value) {
+      const uint8_t a = headload(&condahead[first]), b = headload(&condahead[second]);
+      if (a == 2 || b == 2) {
+        return a == b ? 0.0f : std::numeric_limits<float>::infinity();
+      }
     }
     // [2]
     if (params.conda == 1) {
@@ -315,7 +328,7 @@ namespace pipeann {
         condaedit(cur, CondaEdit{'D', (uint32_t) id, {}}, op);
         return false;
       }
-      return !(tomb && condahead[id] == 2);
+      return !(tomb && headload(&condahead[id]) == 2);
     };
     auto verify = [&](unsigned id, const DiskNode<T> &node) -> bool {
       cur = id;
@@ -518,7 +531,7 @@ namespace pipeann {
       // [2]
       op.point[id].assign(point, point + meta_.data_dim);
       nbr_handler->insert(op.point[id].data(), id);
-      condahead[id] = point[0] == std::numeric_limits<T>::max() ? 1 : 0;
+      headstore(&condahead[id], point[0] == std::numeric_limits<T>::max() ? 1 : 0);
       condaedit(id, CondaEdit{'V', 0, {}}, op);
       // [3]
       std::vector<Neighbor> expanded;
@@ -652,7 +665,7 @@ namespace pipeann {
     op.point[id].assign(meta_.data_dim, std::numeric_limits<T>::max());
     condaedit(id, CondaEdit{'V', 0, {}}, op);
     nbr_handler->insert(op.point[id].data(), id);
-    condahead[id] = 2;
+    headstore(&condahead[id], 2);
     // [2]
     condaflush(op);
     reader->deref(&op.pages);
