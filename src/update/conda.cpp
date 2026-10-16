@@ -134,6 +134,12 @@ namespace pipeann {
   }
 
   template<typename T, typename TagT>
+  bool SSDIndex<T, TagT>::condaout(uint32_t id) {
+    // [1]
+    return id >= condalive.size() || headload(&condalive[id]) == 0;
+  }
+
+  template<typename T, typename TagT>
   uint32_t SSDIndex<T, TagT>::condareserve() {
     // [1]
     uint32_t id = 0;
@@ -583,7 +589,7 @@ namespace pipeann {
     std::sort(sorted.begin(), sorted.end(), closer);
     std::vector<uint32_t> pool;
     for (uint64_t i = 0; i < CONDA_POOL && i < sorted.size(); ++i) {
-      if (condagone.find(sorted[i].id) == condagone.end()) {
+      if (!condaout(sorted[i].id)) {
         pool.push_back(sorted[i].id);
       }
     }
@@ -591,7 +597,7 @@ namespace pipeann {
     std::unordered_map<unsigned, std::vector<unsigned>> updates;
     std::vector<uint32_t> in;
     for (auto &node : expanded) {
-      if (condagone.find(node.id) != condagone.end()) {
+      if (condaout(node.id)) {
         continue;
       }
       const std::vector<uint32_t> &list = condaget(node.id, op);
@@ -611,7 +617,7 @@ namespace pipeann {
     // [4]
     const std::vector<uint32_t> out = condaget(id, op);
     for (uint32_t w : out) {
-      if (condagone.find(w) != condagone.end()) {
+      if (condaout(w)) {
         continue;
       }
       for (uint32_t y : condaclose(pool, w, op)) {
@@ -632,7 +638,7 @@ namespace pipeann {
     for (auto &kv : updates) {
       std::vector<uint32_t> filtered;
       for (unsigned x : kv.second) {
-        if (x != kv.first && condagone.find(x) == condagone.end()) {
+        if (x != kv.first && !condaout(x)) {
           filtered.push_back(x);
         }
       }
@@ -709,6 +715,42 @@ namespace pipeann {
       condafree.push_back(gone[i]);
     }
     condagone.clear();
+  }
+
+  template<typename T, typename TagT>
+  bool SSDIndex<T, TagT>::condaremove(TagT tag) {
+    // [1] MarkDelete: the tag leaves the live map, its vertex the live set
+    std::shared_lock<std::shared_mutex> gate(condagate);
+    uint32_t id = kInvalidID;
+    {
+      std::lock_guard<std::mutex> guard(condamu);
+      if (!condaloc.find(tag, id)) {
+        return false;
+      }
+      condaloc.erase(tag);
+      headstore(&condalive[id], 0);
+    }
+    // [2] relink its in-neighbors and out-neighbors
+    condarepair(id);
+    // [3] a deleted entry point gives way to the first live vertex, as in condadelete
+    if (id == condaep) {
+      uint32_t entry = condaep;
+      for (uint64_t at = 0; at < condalive.size(); ++at) {
+        if (!condaout((uint32_t) at)) {
+          entry = (uint32_t) at;
+          break;
+        }
+      }
+      std::lock_guard<WriterFirstMutex> swap(merge_lock);
+      condaep = entry;
+      meta_.entry_point = entry;
+      meta_.entry_point_id = entry;
+    }
+    // [4] a tombstone on the free stack, for a later insert to reuse
+    condaclear(id);
+    std::lock_guard<std::mutex> guard(condamu);
+    condafree.push_back(id);
+    return true;
   }
 
   template<typename T, typename TagT>

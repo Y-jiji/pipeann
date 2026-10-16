@@ -270,6 +270,15 @@ namespace pipeann {
     void condadelete(const std::vector<TagT> &tags, uint32_t nthreads);
 
     /**
+     * @brief CONDA's Delete (the paper's Algorithm 4) of one tag at once, beside concurrent inserts,
+     *  searches and removes: mark it, relink its in- and out-neighbors, then turn it into a tombstone
+     *  on the free stack
+     * @param tag the deleted tag
+     * @return false if the tag is not live
+     */
+    bool condaremove(TagT tag);
+
+    /**
      * @brief The current neighbor list of an id, empty when never stored
      * @param id the vertex
      * @return its out-neighbors in stored order
@@ -503,6 +512,13 @@ namespace pipeann {
      * @return whether CONDA's lazy walk treats it as deleted
      */
     bool condadead(uint32_t id);
+
+    /**
+     * @brief Whether a vertex is out of CONDA's live set: deleted, consolidated, free or never taken
+     * @param id the vertex
+     * @return whether a repair skips it
+     */
+    bool condaout(uint32_t id);
 
     /**
      * @brief CONDA's reserve_location, the caller holding condamu
