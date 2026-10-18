@@ -9,6 +9,14 @@
 
 namespace pipeann {
 
+  /** @brief PIPEANN_FIXED_BEAM set: a search keeps beam_width reads in flight from its start, refilling
+   *  every round with no waste check, as fnct's beam search does (#015 diagnostic)
+   *  @return whether the environment sets PIPEANN_FIXED_BEAM */
+  static bool fixedbeam() {
+    static const bool fixed = std::getenv("PIPEANN_FIXED_BEAM") != nullptr;
+    return fixed;
+  }
+
   // Common pipelined search loop used by pipe_search, spec_postfilter_search, and spec_infilter_search.
   //
   // Template callbacks:
@@ -165,7 +173,7 @@ namespace pipeann {
     }
 
     // --- In-memory index initialization ---
-    int64_t cur_beam_width = std::min<uint64_t>(4, beam_width);
+    int64_t cur_beam_width = fixedbeam() ? (int64_t) beam_width : std::min<uint64_t>(4, beam_width);
     std::vector<unsigned> mem_tags(mem_L);
     std::vector<float> mem_dists(mem_L);
 
@@ -361,7 +369,7 @@ namespace pipeann {
       std::ignore = n_in;
       std::ignore = n_out;
 
-      if (max_marker >= 5 && n_in + n_out > 0) {
+      if (!fixedbeam() && max_marker >= 5 && n_in + n_out > 0) {
         cur_n_in += n_in;
         cur_tot += n_in + n_out;
         constexpr double kWasteThreshold = 0.1;
@@ -373,7 +381,7 @@ namespace pipeann {
       }
 
       if ((int64_t) on_flight_ios.size() < cur_beam_width) {
-        send_best_read_req(1);
+        send_best_read_req(fixedbeam() ? (uint32_t) (cur_beam_width - on_flight_ios.size()) : 1);
       }
       marker = calc_best_node();
       max_marker = std::max(max_marker, marker);
