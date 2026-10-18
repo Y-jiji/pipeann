@@ -9,11 +9,11 @@
 
 namespace pipeann {
 
-  /** @brief PIPEANN_FIXED_BEAM set: a search keeps beam_width reads in flight from its start, refilling
+  /** @brief PIPEANN_FIXED_BEAM_WIDTH set: a search keeps beam_width reads in flight from its start, refilling
    *  every round with no waste check, as fnct's beam search does (#015 diagnostic)
-   *  @return whether the environment sets PIPEANN_FIXED_BEAM */
+   *  @return whether the environment sets PIPEANN_FIXED_BEAM_WIDTH */
   static bool fixedbeam() {
-    static const bool fixed = std::getenv("PIPEANN_FIXED_BEAM") != nullptr;
+    static const bool fixed = std::getenv("PIPEANN_FIXED_BEAM_WIDTH") != nullptr;
     return fixed;
   }
 
