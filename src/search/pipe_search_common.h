@@ -173,7 +173,8 @@ namespace pipeann {
     }
 
     // --- In-memory index initialization ---
-    int64_t cur_beam_width = fixedbeam() ? (int64_t) beam_width : std::min<uint64_t>(4, beam_width);
+    int64_t cur_beam_width =
+        fixedbeam() ? (int64_t) beam_width : (int64_t) std::min<uint64_t>(4, beam_width);
     std::vector<unsigned> mem_tags(mem_L);
     std::vector<float> mem_dists(mem_L);
 
