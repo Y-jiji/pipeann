@@ -31,10 +31,13 @@ namespace pipeann {
                                              InsertContext *insert_ctx, float range_partial,
                                              const std::vector<uint32_t> *seeds) {
     QueryBuffer *query_buf = pop_query_buf(query1);
-    // A search thread spin-polls its own completions (poll_all), so an
-    // SQPOLL kernel thread doubles the cores one search thread needs.
-    // Insert already avoids it (direct_insert.cpp:33); search follows.
+    // A search submits through an SQPOLL ring as upstream's does; insert
+    // keeps its plain ring (direct_insert.cpp:33).
+#ifdef USE_URING
+    void *ctx = reader->get_ctx(IORING_SETUP_SQPOLL);
+#else
     void *ctx = reader->get_ctx();
+#endif
 
     if (beam_width > MAX_N_SECTOR_READS) {
       LOG(ERROR) << "Beamwidth can not be higher than MAX_N_SECTOR_READS";
