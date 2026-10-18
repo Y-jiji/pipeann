@@ -382,7 +382,8 @@ namespace pipeann {
       }
 
       if ((int64_t) on_flight_ios.size() < cur_beam_width) {
-        send_best_read_req(fixedbeam() ? (uint32_t) (cur_beam_width - on_flight_ios.size()) : 1);
+        const int64_t room = cur_beam_width - (int64_t) on_flight_ios.size();
+        send_best_read_req(fixedbeam() ? (uint32_t) room : 1);
       }
       marker = calc_best_node();
       max_marker = std::max(max_marker, marker);
