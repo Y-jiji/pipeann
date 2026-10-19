@@ -805,12 +805,31 @@ namespace {
     return spins;
   }
 
+  // The completion ring the kernel maps at an aio context's address (its stable user ABI, the one
+  // fio's userspace_reap reads): head and tail equal means no completion waits.
+  constexpr unsigned AIO_RING_MAGIC = 0xa10a10a1;
+  struct AioRing {
+    unsigned id, nr, head, tail, magic, compat_features, incompat_features, header_length;
+  };
+
+  bool ringempty(io_context_t ctx) {
+    const AioRing *ring = reinterpret_cast<const AioRing *>(ctx);
+    if (ring->magic != AIO_RING_MAGIC) {
+      return false;
+    }
+    const unsigned head = __atomic_load_n(&ring->head, __ATOMIC_ACQUIRE);
+    const unsigned tail = __atomic_load_n(&ring->tail, __ATOMIC_ACQUIRE);
+    return head == tail;
+  }
+
   int get_events(io_context_t ctx, io_event_t *evts) {
     static thread_local int empty = 0;
     int ret;
     if (poll_spins() > 0 && empty >= poll_spins()) {
       timespec wait{0, POLL_WAIT_NS};
       ret = io_getevents(ctx, 1, MAX_EVENTS, evts, &wait);
+    } else if (ringempty(ctx)) {
+      ret = 0;  // what a non-blocking io_getevents would return, without the system call
     } else {
       ret = io_getevents(ctx, 0, MAX_EVENTS, evts, nullptr);
     }
