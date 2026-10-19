@@ -773,53 +773,49 @@ namespace pipeann {
   }
 
   template<typename T, typename TagT>
-  void SSDIndex<T, TagT>::lock_vec(pipeann::SparseLockTable<uint64_t> &lock_table, uint32_t target,
+  void SSDIndex<T, TagT>::lock_vec(pipeann::KeyLocks &lock_table, uint32_t target,
                                    const std::vector<uint32_t> &neighbors, bool rd) {
     std::vector<uint32_t> to_lock;
     to_lock.assign(neighbors.begin(), neighbors.end());
     if (target != kInvalidID)
       to_lock.push_back(target);
-    std::sort(to_lock.begin(), to_lock.end());
-    auto orig_size = to_lock.size();
-    to_lock.erase(std::unique(to_lock.begin(), to_lock.end()), to_lock.end());
+    pipeann::bystripe(lock_table, to_lock);
     for (auto &id : to_lock) {
       rd ? lock_table.rdlock(id) : lock_table.wrlock(id);
     }
   }
 
   template<typename T, typename TagT>
-  void SSDIndex<T, TagT>::unlock_vec(pipeann::SparseLockTable<uint64_t> &lock_table, uint32_t target,
+  void SSDIndex<T, TagT>::unlock_vec(pipeann::KeyLocks &lock_table, uint32_t target,
                                      const std::vector<uint32_t> &neighbors) {
     std::vector<uint32_t> to_unlock;
     to_unlock.assign(neighbors.begin(), neighbors.end());
     if (target != kInvalidID)
       to_unlock.push_back(target);
-    std::sort(to_unlock.begin(), to_unlock.end());
-    to_unlock.erase(std::unique(to_unlock.begin(), to_unlock.end()), to_unlock.end());
+    pipeann::bystripe(lock_table, to_unlock);
     for (auto &id : to_unlock) {
       lock_table.unlock(id);
     }
   }
 
   template<typename T, typename TagT>
-  std::vector<uint32_t> SSDIndex<T, TagT>::get_to_lock_idx(uint32_t target, const std::vector<uint32_t> &neighbors) {
+  std::vector<uint32_t> SSDIndex<T, TagT>::get_to_lock_idx(pipeann::KeyLocks &lock_table, uint32_t target,
+                                                           const std::vector<uint32_t> &neighbors) {
     std::vector<uint32_t> to_lock;
     to_lock.assign(neighbors.begin(), neighbors.end());
     if (target != kInvalidID) {
       to_lock.push_back(target);
     }
-    // Sort and deduplicate.
-    std::sort(to_lock.begin(), to_lock.end());
-    auto last = std::unique(to_lock.begin(), to_lock.end());
-    to_lock.erase(last, to_lock.end());
+    // Sort and deduplicate by stripe.
+    pipeann::bystripe(lock_table, to_lock);
     return to_lock;
   }
 
   template<typename T, typename TagT>
-  std::vector<uint32_t> SSDIndex<T, TagT>::lock_idx(pipeann::SparseLockTable<uint64_t> &lock_table, uint32_t target,
+  std::vector<uint32_t> SSDIndex<T, TagT>::lock_idx(pipeann::KeyLocks &lock_table, uint32_t target,
                                                     const std::vector<uint32_t> &neighbors, bool rd) {
 #ifndef READ_ONLY_TESTS
-    std::vector<uint32_t> to_lock = get_to_lock_idx(target, neighbors);
+    std::vector<uint32_t> to_lock = get_to_lock_idx(lock_table, target, neighbors);
     if (rd) {
       for (auto &id : to_lock) {
         lock_table.rdlock(id);
@@ -857,7 +853,7 @@ namespace pipeann {
   }
 
   template<typename T, typename TagT>
-  void SSDIndex<T, TagT>::unlock_idx(pipeann::SparseLockTable<uint64_t> &lock_table,
+  void SSDIndex<T, TagT>::unlock_idx(pipeann::KeyLocks &lock_table,
                                      const std::vector<uint32_t> &to_lock) {
 #ifndef READ_ONLY_TESTS
     for (auto &id : to_lock) {
@@ -867,7 +863,7 @@ namespace pipeann {
   }
 
   template<typename T, typename TagT>
-  void SSDIndex<T, TagT>::unlock_idx(pipeann::SparseLockTable<uint64_t> &lock_table, const uint32_t &to_lock) {
+  void SSDIndex<T, TagT>::unlock_idx(pipeann::KeyLocks &lock_table, const uint32_t &to_lock) {
 #ifndef READ_ONLY_TESTS
     lock_table.unlock(to_lock);
 #endif

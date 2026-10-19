@@ -386,9 +386,9 @@ namespace pipeann {
     std::thread *bg_io_thread_[kBgIOThreads]{nullptr};
 
     // Locking tables for concurrency control.
-    pipeann::SparseLockTable<uint64_t> page_lock_table;
-    pipeann::SparseLockTable<uint64_t> vec_lock_table;
-    pipeann::SparseLockTable<uint64_t> idx_lock_table;
+    pipeann::KeyLocks page_lock_table;
+    pipeann::KeyLocks vec_lock_table;
+    pipeann::KeyLocks idx_lock_table;
 
     // ID to location mapping.
     // Concurrency control is done in lock_idx.
@@ -691,16 +691,17 @@ namespace pipeann {
     void verify_id2loc();
 
     // lock-related.
-    void lock_vec(pipeann::SparseLockTable<uint64_t> &lock_table, uint32_t target,
+    void lock_vec(pipeann::KeyLocks &lock_table, uint32_t target,
                   const std::vector<uint32_t> &neighbors, bool rd = false);
-    void unlock_vec(pipeann::SparseLockTable<uint64_t> &lock_table, uint32_t target,
+    void unlock_vec(pipeann::KeyLocks &lock_table, uint32_t target,
                     const std::vector<uint32_t> &neighbors);
 
-    std::vector<uint32_t> get_to_lock_idx(uint32_t target, const std::vector<uint32_t> &neighbors);
+    std::vector<uint32_t> get_to_lock_idx(pipeann::KeyLocks &lock_table, uint32_t target,
+                                          const std::vector<uint32_t> &neighbors);
 
-    std::vector<uint32_t> lock_idx(pipeann::SparseLockTable<uint64_t> &lock_table, uint32_t target,
+    std::vector<uint32_t> lock_idx(pipeann::KeyLocks &lock_table, uint32_t target,
                                    const std::vector<uint32_t> &neighbors, bool rd = false);
-    void unlock_idx(pipeann::SparseLockTable<uint64_t> &lock_table, const std::vector<uint32_t> &to_lock);
-    void unlock_idx(pipeann::SparseLockTable<uint64_t> &lock_table, const uint32_t &to_lock);
+    void unlock_idx(pipeann::KeyLocks &lock_table, const std::vector<uint32_t> &to_lock);
+    void unlock_idx(pipeann::KeyLocks &lock_table, const uint32_t &to_lock);
   };
 }  // namespace pipeann

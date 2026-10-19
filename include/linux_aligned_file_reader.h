@@ -54,22 +54,21 @@ class LinuxAlignedFileReader : public AlignedFileReader {
 };
 
 namespace pipeann {
-  inline std::vector<uint64_t> lockReqs(SparseLockTable<uint64_t> &lock_table, std::vector<IORequest> &reqs) {
+  inline std::vector<uint64_t> lockReqs(KeyLocks &lock_table, std::vector<IORequest> &reqs) {
     std::vector<uint64_t> ret;
     for (auto &req : reqs) {
       for (uint64_t i = 0; i < req.len; i += SECTOR_LEN) {
         ret.push_back((req.offset + i) / SECTOR_LEN);
       }
     }
-    std::sort(ret.begin(), ret.end());
-    ret = std::vector<uint64_t>(ret.begin(), std::unique(ret.begin(), ret.end()));
+    bystripe(lock_table, ret);
     for (auto &x : ret) {
       lock_table.wrlock(x);
     }
     return ret;
   }
 
-  inline void unlockReqs(SparseLockTable<uint64_t> &lock_table, std::vector<uint64_t> &reqs) {
+  inline void unlockReqs(KeyLocks &lock_table, std::vector<uint64_t> &reqs) {
     for (auto &x : reqs) {
       lock_table.unlock(x);
     }

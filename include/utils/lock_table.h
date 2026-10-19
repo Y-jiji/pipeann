@@ -10,6 +10,8 @@
 #include <linux/futex.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <algorithm>
+#include <vector>
 #include "utils/libcuckoo/cuckoohash_map.hh"
 #include "utils/log.h"
 
@@ -170,6 +172,13 @@ namespace pipeann {
      */
     size_t size();
 
+    /**
+     * @brief The latch a key maps to, the key itself as every key has its own
+     * @param key the key
+     * @return the stripe
+     */
+    uint64_t stripe(const KEY &key);
+
    private:
     /**
      * @brief Count one more holder or waiter on the key's entry, making the entry if absent
@@ -260,6 +269,157 @@ namespace pipeann {
       }
       return entry.second == 0;
     });
+  }
+
+  template<class KEY, class HASH>
+  uint64_t SparseLockTable<KEY, HASH>::stripe(const KEY &key) {
+    return (uint64_t) key;
+  }
+
+  /** @brief log2 of the latches a DenseLockTable holds */
+  constexpr size_t DENSE_BITS = 22;
+
+  /**
+   * @brief Key locks as a fixed array of 2^DENSE_BITS ownerless latches, a key taking the latch its
+   *        hash picks; keys sharing a latch share its holds, so a caller locking several keys takes
+   *        each stripe once, in stripe order
+   * @tparam KEY key type
+   * @tparam HASH hash of a key
+   */
+  template<class KEY, class HASH = std::hash<KEY>>
+  class DenseLockTable {
+   public:
+    /** @brief A table of free latches */
+    DenseLockTable();
+
+    /** @brief Free the latches */
+    ~DenseLockTable();
+
+    DenseLockTable(const DenseLockTable &) = delete;
+    DenseLockTable &operator=(const DenseLockTable &) = delete;
+
+    /**
+     * @brief Take a read hold on key's latch unless it is write-held
+     * @param key the key
+     * @return 0 when taken, EBUSY when not
+     */
+    int tryrdlock(const KEY &key);
+
+    /**
+     * @brief Take the write hold on key's latch if nobody holds it
+     * @param key the key
+     * @return 0 when taken, EBUSY when not
+     */
+    int trywrlock(const KEY &key);
+
+    /**
+     * @brief Take a read hold on key's latch, waiting while it is write-held
+     * @param key the key
+     */
+    void rdlock(const KEY &key);
+
+    /**
+     * @brief Take the write hold on key's latch, waiting while it is held
+     * @param key the key
+     */
+    void wrlock(const KEY &key);
+
+    /**
+     * @brief Drop a hold on key's latch, from any thread
+     * @param key the key
+     */
+    void unlock(const KEY &key);
+
+    /**
+     * @brief Keys held or waited on, which a fixed array does not track
+     * @return 0
+     */
+    size_t size();
+
+    /**
+     * @brief The latch a key maps to
+     * @param key the key
+     * @return the stripe
+     */
+    uint64_t stripe(const KEY &key);
+
+   private:
+    SparseLatch *latches;
+  };
+
+  template<class KEY, class HASH>
+  DenseLockTable<KEY, HASH>::DenseLockTable() : latches(new SparseLatch[(size_t) 1 << DENSE_BITS]) {
+  }
+
+  template<class KEY, class HASH>
+  DenseLockTable<KEY, HASH>::~DenseLockTable() {
+    delete[] latches;
+  }
+
+  template<class KEY, class HASH>
+  int DenseLockTable<KEY, HASH>::tryrdlock(const KEY &key) {
+    return latches[stripe(key)].tryrd() ? 0 : EBUSY;
+  }
+
+  template<class KEY, class HASH>
+  int DenseLockTable<KEY, HASH>::trywrlock(const KEY &key) {
+    return latches[stripe(key)].trywr() ? 0 : EBUSY;
+  }
+
+  template<class KEY, class HASH>
+  void DenseLockTable<KEY, HASH>::rdlock(const KEY &key) {
+    latches[stripe(key)].rd();
+  }
+
+  template<class KEY, class HASH>
+  void DenseLockTable<KEY, HASH>::wrlock(const KEY &key) {
+    latches[stripe(key)].wr();
+  }
+
+  template<class KEY, class HASH>
+  void DenseLockTable<KEY, HASH>::unlock(const KEY &key) {
+    latches[stripe(key)].release();
+  }
+
+  template<class KEY, class HASH>
+  size_t DenseLockTable<KEY, HASH>::size() {
+    return 0;
+  }
+
+  template<class KEY, class HASH>
+  uint64_t DenseLockTable<KEY, HASH>::stripe(const KEY &key) {
+    uint64_t h = (uint64_t) HASH{}(key);
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    return h & (((uint64_t) 1 << DENSE_BITS) - 1);
+  }
+
+#ifdef PIPEANN_DENSE_LOCKS
+  using KeyLocks = DenseLockTable<uint64_t>;
+#else
+  using KeyLocks = SparseLockTable<uint64_t>;
+#endif
+
+  /**
+   * @brief Sort keys by the stripe each takes in table and keep one key a stripe, the order every
+   *        multi-key lock follows
+   * @tparam TABLE lock table type
+   * @tparam K key type
+   * @param table the lock table
+   * @param keys the keys, sorted and reduced in place
+   */
+  template<class TABLE, class K>
+  inline void bystripe(TABLE &table, std::vector<K> &keys) {
+    // [1]
+    std::sort(keys.begin(), keys.end(), [&table](const K &a, const K &b) {
+      const uint64_t sa = table.stripe(a), sb = table.stripe(b);
+      return sa != sb ? sa < sb : a < b;
+    });
+    // [2]
+    keys.erase(std::unique(keys.begin(), keys.end(),
+                           [&table](const K &a, const K &b) { return table.stripe(a) == table.stripe(b); }),
+               keys.end());
   }
 
   template<class K, class HashFunction = std::hash<K>>
