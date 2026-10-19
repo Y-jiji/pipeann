@@ -2,6 +2,7 @@
 
 #include "utils.h"
 #include "utils/tsl/robin_set.h"
+#include "utils/flatset.h"
 
 constexpr size_t MAX_N_SECTOR_READS = 128;
 constexpr size_t MAX_N_EDGES = 2048;
@@ -229,6 +230,12 @@ namespace pipeann {
     }
   };
 
+  /** @brief Where a read node sits: its read slot's buffer and its location */
+  struct NodeAt {
+    char *buf;
+    uint32_t loc;
+  };
+
   struct QueryBuffer {
     uint8_t *coord_scratch_ = nullptr;  // MUST BE AT LEAST [aligned_dim * sizeof(T)], for current vector in comparison.
 
@@ -242,8 +249,9 @@ namespace pipeann {
     uint8_t *aligned_query_ = nullptr;      // MUST BE AT LEAST [aligned_dim * sizeof(T)], for aligned query.
     char *update_buf = nullptr;             // Dynamic allocate in insert_in_place.
 
-    tsl::robin_set<uint64_t> *visited = nullptr;
-    tsl::robin_set<unsigned> *page_visited = nullptr;
+    FlatSet<uint64_t> *visited = nullptr;
+    FlatSet<unsigned> *page_visited = nullptr;
+    FlatMap<unsigned, NodeAt> *nodes = nullptr;  // read nodes not yet evicted, by id
     IORequest reqs[MAX_N_SECTOR_READS];
 
     template<typename T>
@@ -258,8 +266,9 @@ namespace pipeann {
 
     void reset() {
       sector_idx = 0;
-      visited->clear();  // does not deallocate memory.
+      visited->clear();  // O(1), by stamp.
       page_visited->clear();
+      nodes->clear();
     }
   };
 };  // namespace pipeann

@@ -101,7 +101,7 @@ namespace pipeann {
 
       // 1-hop neighbors that are approximate members.
       for (unsigned m = 0; m < node.nnbrs && nbors_cand_size < node.nnbrs; ++m) {
-        if (visited.find(node.nbrs[m]) == visited.end() && is_member_approx(node.nbrs[m])) {
+        if (!visited.contains(node.nbrs[m]) && is_member_approx(node.nbrs[m])) {
           nbr_ids[nbors_cand_size++] = node.nbrs[m];
           visited.insert(node.nbrs[m]);
         }
@@ -113,7 +113,7 @@ namespace pipeann {
       if (use_dense_nbrs) {
         // 2-hop (dense) neighbors that are approximate members.
         for (unsigned m = 0; m < node.n_dense_nbrs && nbors_cand_size < node.nnbrs; ++m) {
-          if (visited.find(node.dense_nbrs[m]) == visited.end() && is_member_approx(node.dense_nbrs[m])) {
+          if (!visited.contains(node.dense_nbrs[m]) && is_member_approx(node.dense_nbrs[m])) {
             nbr_ids[nbors_cand_size++] = node.dense_nbrs[m];
             visited.insert(node.dense_nbrs[m]);
           }
@@ -121,7 +121,7 @@ namespace pipeann {
         n_member = nbors_cand_size;
         // Remaining 1-hop neighbors for connectivity.
         for (unsigned m = 0; m < node.nnbrs && nbors_cand_size < node.nnbrs; ++m) {
-          if (visited.find(node.nbrs[m]) == visited.end()) {
+          if (!visited.contains(node.nbrs[m])) {
             nbr_ids[nbors_cand_size++] = node.nbrs[m];
             visited.insert(node.nbrs[m]);
           }
@@ -216,8 +216,10 @@ namespace pipeann {
       }
     };
     std::queue<io_t> on_flight_ios;
-    std::unordered_map<unsigned, DiskNode<T>> id_buf_map;
+    auto &id_buf_map = *(query_buf->nodes);
     std::vector<int64_t> slot_owner(MAX_N_SECTOR_READS, -1);
+    IORequest *queued[MAX_N_SECTOR_READS];  // reads chosen this round, sent together by send_best_read_req
+    uint32_t n_queued = 0;
 
     auto send_read_req = [&](Neighbor &item) -> bool {
       PTRACE_REF("I %u", item.id);
@@ -227,7 +229,7 @@ namespace pipeann {
 
       uint64_t &cur_buf_idx = query_buf->sector_idx;
       const int64_t owner = slot_owner[cur_buf_idx];
-      if (owner >= 0 && id_buf_map.erase((unsigned) owner) != 0) {
+      if (owner >= 0 && id_buf_map.erase((unsigned) owner)) {
         for (unsigned i = 0; i < cur_list_size; ++i) {
           if (retset[i].id == (unsigned) owner && !retset[i].visited) {
             retset[i].flag = true;
@@ -239,7 +241,7 @@ namespace pipeann {
       auto &req = query_buf->reqs[cur_buf_idx];
       req = IORequest(static_cast<uint64_t>(pid) * SECTOR_LEN, read_io_size, buf, u_loc_offset(loc), meta_.max_node_len,
                       sector_scratch);
-      reader->send_read(req, ctx);
+      queued[n_queued++] = &req;
 
       on_flight_ios.push(io_t{item, pid, loc, &req});
       cur_buf_idx = (cur_buf_idx + 1) % MAX_N_SECTOR_READS;
@@ -259,7 +261,7 @@ namespace pipeann {
       unsigned n_in = 0, n_out = 0;
       while (!on_flight_ios.empty() && on_flight_ios.front().finished()) {
         io_t &io = on_flight_ios.front();
-        id_buf_map.insert(std::make_pair(io.nbr.id, node_from_page((char *) io.read_req->buf, io.loc)));
+        id_buf_map.insert(io.nbr.id, NodeAt{(char *) io.read_req->buf, io.loc});
         if (insert_ctx != nullptr) {
           insert_ctx->hint_pages.push_back(io.page_id);
         }
@@ -277,7 +279,7 @@ namespace pipeann {
       unsigned n_sent = 0, marker = 0;
       while (marker < cur_list_size && n_sent < n) {
         while (marker < cur_list_size &&
-               (retset[marker].flag == false || id_buf_map.find(retset[marker].id) != id_buf_map.end())) {
+               (retset[marker].flag == false || id_buf_map.find(retset[marker].id) != nullptr)) {
           retset[marker].flag = false;
           ++marker;
         }
@@ -286,6 +288,8 @@ namespace pipeann {
         }
         n_sent += send_read_req(retset[marker]);
       }
+      reader->send_reads(queued, n_queued, ctx);
+      n_queued = 0;
       return n_sent != 0;
     };
 
@@ -293,12 +297,13 @@ namespace pipeann {
     auto calc_best_node = [&]() -> int {
       unsigned marker = 0, nk = cur_list_size, first_unvisited_eager = cur_list_size;
       for (marker = 0; marker < cur_list_size; ++marker) {
-        if (!retset[marker].visited && id_buf_map.find(retset[marker].id) != id_buf_map.end()) {
+        const NodeAt *at = retset[marker].visited ? nullptr : id_buf_map.find(retset[marker].id);
+        if (at != nullptr) {
           PTRACE_IN("X %u %u", retset[marker].id, marker);
           retset[marker].flag = false;
           retset[marker].visited = true;
-          auto it = id_buf_map.find(retset[marker].id);
-          auto &[id, node] = *it;
+          const unsigned id = retset[marker].id;
+          DiskNode<T> node = node_from_page(at->buf, at->loc);
           if (compute_exact_dists_and_push(node, id)) {
             retset[marker].is_member = true;
           }
@@ -308,7 +313,7 @@ namespace pipeann {
       }
 
       for (unsigned i = 0; i < cur_list_size; ++i) {
-        if (!retset[i].visited && retset[i].flag && id_buf_map.find(retset[i].id) == id_buf_map.end()) {
+        if (!retset[i].visited && retset[i].flag && id_buf_map.find(retset[i].id) == nullptr) {
           first_unvisited_eager = i;
           break;
         }

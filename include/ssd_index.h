@@ -128,8 +128,9 @@ namespace pipeann {
       pipeann::alloc_aligned((void **) &buf.aligned_dist_scratch, MAX_N_EDGES * sizeof(float), 256);
       pipeann::alloc_aligned((void **) &buf.aligned_query_, this->aligned_dim * sizeof(T), 8 * sizeof(T));
 
-      buf.visited = new tsl::robin_set<uint64_t>(4096);
-      buf.page_visited = new tsl::robin_set<unsigned>(4096);
+      buf.visited = new FlatSet<uint64_t>();
+      buf.page_visited = new FlatSet<unsigned>();
+      buf.nodes = new FlatMap<unsigned, NodeAt>();
 
       memset(buf.sector_scratch, 0, MAX_N_SECTOR_READS * io_size_dense);
       memset(buf.coord_scratch_, 0, this->aligned_dim * sizeof(T));

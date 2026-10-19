@@ -51,8 +51,8 @@ namespace pipeann {
 
     Timer query_timer, io_timer, cpu_timer;
     std::vector<Neighbor> retset(4096);
-    tsl::robin_set<uint64_t> &visited = *(query_buf->visited);
-    tsl::robin_set<unsigned> &page_visited = *(query_buf->page_visited);
+    FlatSet<uint64_t> &visited = *(query_buf->visited);
+    FlatSet<unsigned> &page_visited = *(query_buf->page_visited);
     unsigned cur_list_size = 0;
 
     std::vector<Neighbor> full_retset;
@@ -71,7 +71,7 @@ namespace pipeann {
       unsigned nnbrs = node.nnbrs;
       unsigned nbors_cand_size = 0;
       for (unsigned m = 0; m < nnbrs; ++m) {
-        if (visited.find(node_nbrs[m]) == visited.end()) {
+        if (!visited.contains(node_nbrs[m])) {
           node_nbrs[nbors_cand_size++] = node_nbrs[m];
           visited.insert(node_nbrs[m]);
         }
@@ -158,7 +158,7 @@ namespace pipeann {
       // 100 us
       while (marker < cur_list_size && frontier.size() < beam_width && num_seen < beam_width) {
         const unsigned pid = id2page(retset[marker].id);
-        if (page_visited.find(pid) == page_visited.end() && retset[marker].flag) {
+        if (!page_visited.contains(pid) && retset[marker].flag) {
           num_seen++;
           // disable nhood cache.
           frontier.push_back(retset[marker].id);
