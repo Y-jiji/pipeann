@@ -350,6 +350,8 @@ namespace pipeann {
       std::vector<uint32_t> dirty;
       std::vector<uint64_t> hints;
       std::vector<uint64_t> pages;
+      uint64_t pairs = 0;
+      uint64_t turns = 0;
     };
 
     using PageArr = std::vector<uint32_t>;

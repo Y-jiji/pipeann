@@ -271,6 +271,7 @@ namespace pipeann {
     }
     float out = 0.0f;
     nbr_handler->compute_dists(first, &second, 1, &out, scratch.bytes);
+    op.pairs++;
     return out;
   }
 
@@ -373,6 +374,7 @@ namespace pipeann {
                                           CondaOp &op, std::vector<uint32_t> &pruned,
                                           std::vector<uint32_t> &result) {
     // [1]
+    op.turns++;
     const uint64_t n = expanded.size();
     std::vector<float> occlude(n, std::numeric_limits<float>::max());
     std::vector<uint32_t> occluder(n, 0);
@@ -458,6 +460,7 @@ namespace pipeann {
   bool SSDIndex<T, TagT>::condaalpha(uint32_t center, std::vector<Neighbor> &pool, uint32_t self,
                                      std::vector<uint32_t> &result, CondaOp &op) {
     // [1]
+    op.turns++;
     std::sort(pool.begin(), pool.end(), closer);
     if (pool.size() > params.C) {
       pool.resize(params.C);
@@ -560,6 +563,8 @@ namespace pipeann {
       if (stats != nullptr) {
         stats->n_out_edges = own.size();
         stats->n_pages_touched = written;
+        stats->n_passes += op.turns;
+        stats->n_sdc += op.pairs;
       }
       return (int) id;
     };

@@ -47,9 +47,13 @@ namespace pipeann {
     InsertContext insert_ctx(kExpandedNodesFactor * this->params.L, this->aligned_dim);
     this->do_pipe_search(point1, 0, params.L, params.beam_width, exp_node_info, stats, &insert_ctx);
     std::vector<uint32_t> new_nhood;
-    pipeann::prune_neighbors(exp_node_info, new_nhood, params, metric, [this, &insert_ctx](uint32_t a, uint32_t b) {
-      return this->dist_cmp->compare(insert_ctx.coord_map[a], insert_ctx.coord_map[b], this->meta_.data_dim);
-    });
+    const uint32_t passes =
+        pipeann::prune_neighbors(exp_node_info, new_nhood, params, metric, [this, &insert_ctx](uint32_t a, uint32_t b) {
+          return this->dist_cmp->compare(insert_ctx.coord_map[a], insert_ctx.coord_map[b], this->meta_.data_dim);
+        });
+    if (stats != nullptr) {
+      stats->n_passes += passes;
+    }
     // locs[new_nhood.size()] is the target, locs[0:new_nhood.size() - 1] are the neighbors.
 
     std::set<uint64_t> pages_need_to_read;
@@ -196,9 +200,15 @@ namespace pipeann {
         auto nbr = this->nbr_handler;
         bool evicted_existing = pipeann::delta_prune_neighbors(
             nhood, new_nhood[i], target_id, params, metric,
-            [nbr, &thread_pq_buf](uint32_t center, const uint32_t *ids, uint32_t n, float *dists_out) {
+            [nbr, &thread_pq_buf, stats](uint32_t center, const uint32_t *ids, uint32_t n, float *dists_out) {
               nbr->compute_dists(center, ids, n, dists_out, thread_pq_buf);
+              if (stats != nullptr) {
+                stats->n_sdc += n;
+              }
             });
+        if (stats != nullptr) {
+          stats->n_passes += 1;
+        }
         if (stats != nullptr && evicted_existing) {
           stats->n_in_edges += 1;
           stats->n_evictions += 1;

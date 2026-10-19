@@ -268,6 +268,9 @@ namespace pipeann {
         const bool in_pool = io.nbr.distance <= retset[cur_list_size - 1].distance;
         PTRACE_REF("C %u %d", io.nbr.id, (int) in_pool);
         in_pool ? ++n_in : ++n_out;
+        if (stats != nullptr) {
+          stats->n_hops += 1;
+        }
         this->unlock_idx(idx_lock_table, io.nbr.id);
         on_flight_ios.pop();
       }

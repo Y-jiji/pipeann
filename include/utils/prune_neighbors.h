@@ -42,11 +42,12 @@ namespace pipeann {
   // params: build parameters (R, C, alpha, saturate_graph).
   // metric: distance metric.
   // compute_distance: callable to compute distance between two IDs: float(uint32_t, uint32_t)
+  // returns the alpha rounds run.
   template<typename DistFunc>
-  inline void prune_neighbors(std::vector<Neighbor> &pool, std::vector<uint32_t> &pruned_list,
-                              const IndexBuildParameters &params, Metric metric, DistFunc &&compute_distance) {
+  inline uint32_t prune_neighbors(std::vector<Neighbor> &pool, std::vector<uint32_t> &pruned_list,
+                                  const IndexBuildParameters &params, Metric metric, DistFunc &&compute_distance) {
     if (pool.empty())
-      return;
+      return 0;
 
     uint32_t range = params.R;
     uint32_t maxc = params.C;
@@ -63,7 +64,9 @@ namespace pipeann {
     std::vector<float> occlude_factor(pool.size(), 0);
 
     float cur_alpha = 1;
+    uint32_t passes = 0;
     while (cur_alpha <= alpha && result_set.size() < range) {
+      passes++;
       uint32_t start = 0;
       while (result_set.size() < range && start < pool.size()) {
         auto &p = pool[start];
@@ -100,6 +103,7 @@ namespace pipeann {
         }
       }
     }
+    return passes;
   }
 
   // ============================================================================

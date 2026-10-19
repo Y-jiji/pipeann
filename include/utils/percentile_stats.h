@@ -25,6 +25,8 @@ namespace pipeann {
     double n_out_edges = 0;     // # outgoing edges written for the newly-inserted node
     double n_in_edges = 0;      // # existing neighbors whose edge list gained a back-edge to the new node
     double n_evictions = 0;     // # of those back-edge updates that evicted a pre-existing edge
+    double n_passes = 0;        // # prune passes: alpha rounds of a full prune, one per delta prune or CONDA prune
+    double n_sdc = 0;           // # PQ code-to-code distances computed while pruning
     double n_filter[N_FILTER_TYPES] = {0};
     double n_est_filter_reads[N_FILTER_TYPES] = {0};
     double n_est_filter_cmps[N_FILTER_TYPES] = {0};
