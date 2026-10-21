@@ -822,7 +822,8 @@ namespace pipeann {
     }
     auto plocked = pipeann::lockReqs(page_lock_table, plock);
     lock_vec(vec_lock_table, kInvalidID, ids);
-    // [3]
+    // [3] a live record whose list an edit replaces and whose vector op holds is rebuilt without its old page;
+    // a dead one is read, for a tombstone written meanwhile keeps its vector
     std::vector<uint8_t> needold(n, 0);
     for (uint64_t i = 0; i < n; ++i) {
       bool list = false, vec = false;
@@ -830,6 +831,7 @@ namespace pipeann {
         list = list || e.token == 'S' || e.token == 'C';
         vec = vec || e.token == 'V';
       }
+      vec = vec || (op.point.find(ids[i]) != op.point.end() && !condadead(ids[i]));
       needold[i] = stored[ids[i]] && !(list && vec);
     }
     std::set<uint64_t> toread;
@@ -879,6 +881,8 @@ namespace pipeann {
         DiskNode<T> old = node_from_page(slot[loc_sector_no(olds[i])], olds[i]);
         list.assign(old.nbrs, old.nbrs + old.nnbrs);
         coords.assign(old.coords, old.coords + meta_.data_dim);
+      } else if (op.point.find(id) != op.point.end()) {
+        coords = op.point.find(id)->second;
       }
       for (auto &e : op.edits.find(id)->second) {
         if (e.token == 'S') {
