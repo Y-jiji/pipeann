@@ -278,6 +278,7 @@ int main(int argc, char **argv) {
   pipeann::SSDIndex<float> port(pipeann::Metric::L2, reader, &exact, true, &params);
   port.load(prefix.c_str(), true);
   port.condaload(prefix + "_base.bin", COUNT, reference.entry());
+  port.start_bg_io();
   if (!same(reference, port, reference.locations())) {
     std::printf("load differs\n");
     return 1;
@@ -307,6 +308,7 @@ int main(int argc, char **argv) {
     std::printf("round %u: %u deletes and %u inserts identical over %u locations\n", r, STEP, STEP,
                 reference.locations());
   }
+  port.stop_bg_io();
   std::printf("PASS\n");
   return 0;
 }
