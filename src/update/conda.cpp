@@ -11,6 +11,7 @@
 #include <queue>
 #include <set>
 #include <shared_mutex>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 
@@ -568,9 +569,14 @@ namespace pipeann {
       }
       return (int) id;
     };
-    // [5]
-    if (condafresh.load() != 0) {
-      std::unique_lock<std::shared_mutex> first(condagate);
+    // [5] the batch's first insert walks FULL alone; one that finds it taken never queues for the writer lock,
+    // which readers would starve, but takes the reader lock that waits for the FULL insert to finish
+    while (condafresh.load() == 1) {
+      std::unique_lock<std::shared_mutex> first(condagate, std::try_to_lock);
+      if (!first.owns_lock()) {
+        std::this_thread::yield();
+        continue;
+      }
       if (condafresh.load() == 1) {
         condafresh.store(2);
         const int id = run(CondaSeek::FULL);
@@ -583,7 +589,7 @@ namespace pipeann {
   }
 
   template<typename T, typename TagT>
-  void SSDIndex<T, TagT>::condarepair(uint32_t id) {
+  void SSDIndex<T, TagT>::condarepair(uint32_t id, bool tomb) {
     // [1]
     CondaOp op;
     condafetch(std::vector<uint32_t>{id}, op);
@@ -639,7 +645,10 @@ namespace pipeann {
         updates[y] = std::move(list);
       }
     }
-    // [5]
+    // [5] each over-full patch's candidates by distance to it, then the lists they prune by in one batch
+    std::vector<std::pair<uint32_t, std::vector<uint32_t>>> patches;
+    std::vector<std::vector<Neighbor>> pools;
+    std::vector<uint32_t> wide;
     for (auto &kv : updates) {
       std::vector<uint32_t> filtered;
       for (unsigned x : kv.second) {
@@ -647,19 +656,32 @@ namespace pipeann {
           filtered.push_back(x);
         }
       }
+      std::vector<Neighbor> cands;
       if (filtered.size() > params.R) {
-        std::vector<Neighbor> cands;
         for (uint32_t x : filtered) {
           cands.push_back(Neighbor(x, condadist(kv.first, x, op), true));
         }
+        wide.insert(wide.end(), filtered.begin(), filtered.end());
+      }
+      patches.emplace_back(kv.first, std::move(filtered));
+      pools.push_back(std::move(cands));
+    }
+    condafetch(wide, op);
+    // [6]
+    for (uint64_t k = 0; k < patches.size(); ++k) {
+      const auto &[center, filtered] = patches[k];
+      if (filtered.size() > params.R) {
         std::vector<uint32_t> kept;
-        condacrng(kv.first, cands, kept, op);
-        condaedit(kv.first, CondaEdit{'S', 0, kept}, op);
+        condacrng(center, pools[k], kept, op);
+        condaedit(center, CondaEdit{'S', 0, kept}, op);
       } else {
-        condaedit(kv.first, CondaEdit{'S', 0, filtered}, op);
+        condaedit(center, CondaEdit{'S', 0, filtered}, op);
       }
     }
-    // [6]
+    // [7]
+    if (tomb) {
+      condatomb(id, op);
+    }
     condaflush(op);
     reader->deref(&op.pages);
   }
@@ -668,14 +690,20 @@ namespace pipeann {
   void SSDIndex<T, TagT>::condaclear(uint32_t id) {
     // [1]
     CondaOp op;
+    condatomb(id, op);
+    // [2]
+    condaflush(op);
+    reader->deref(&op.pages);
+  }
+
+  template<typename T, typename TagT>
+  void SSDIndex<T, TagT>::condatomb(uint32_t id, CondaOp &op) {
+    // [1]
     condaedit(id, CondaEdit{'C', 0, {}}, op);
     op.point[id].assign(meta_.data_dim, std::numeric_limits<T>::max());
     condaedit(id, CondaEdit{'V', 0, {}}, op);
     nbr_handler->insert(op.point[id].data(), id);
     headstore(&condahead[id], 2);
-    // [2]
-    condaflush(op);
-    reader->deref(&op.pages);
   }
 
   template<typename T, typename TagT>
@@ -735,9 +763,7 @@ namespace pipeann {
       condaloc.erase(tag);
       headstore(&condalive[id], 0);
     }
-    // [2] relink its in-neighbors and out-neighbors
-    condarepair(id);
-    // [3] a deleted entry point gives way to the first live vertex, as in condadelete
+    // [2] a deleted entry point gives way to the first live vertex, as in condadelete, before its tombstone lands
     if (id == condaep) {
       uint32_t entry = condaep;
       for (uint64_t at = 0; at < condalive.size(); ++at) {
@@ -751,8 +777,9 @@ namespace pipeann {
       meta_.entry_point = entry;
       meta_.entry_point_id = entry;
     }
-    // [4] a tombstone on the free stack, for a later insert to reuse
-    condaclear(id);
+    // [3] relink its in-neighbors and out-neighbors and write its tombstone, in one flush
+    condarepair(id, true);
+    // [4] the tombstone on the free stack, for a later insert to reuse
     std::lock_guard<std::mutex> guard(condamu);
     condafree.push_back(id);
     return true;

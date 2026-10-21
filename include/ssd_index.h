@@ -272,8 +272,8 @@ namespace pipeann {
 
     /**
      * @brief CONDA's Delete (the paper's Algorithm 4) of one tag at once, beside concurrent inserts,
-     *  searches and removes: mark it, relink its in- and out-neighbors, then turn it into a tombstone
-     *  on the free stack
+     *  searches and removes: mark it, relink its in- and out-neighbors and turn it into a tombstone in one
+     *  flush, then put it on the free stack
      * @param tag the deleted tag
      * @return false if the tag is not live
      */
@@ -545,14 +545,22 @@ namespace pipeann {
     /**
      * @brief CONDA's Process_crng: relink a deleted vertex's in-neighbors and out-neighbors; SHAME(TALLFUNC)
      * @param id the deleted vertex
+     * @param tomb also write the vertex's tombstone, in the repair's one flush
      */
-    void condarepair(uint32_t id);
+    void condarepair(uint32_t id, bool tomb = false);
 
     /**
      * @brief CONDA's consolidation of one deleted vertex: empty list, max vector
      * @param id the deleted vertex
      */
     void condaclear(uint32_t id);
+
+    /**
+     * @brief The tombstone of a deleted vertex as edits of op: empty list, max vector, its code and head set
+     * @param id the deleted vertex
+     * @param op the operation the edits join
+     */
+    void condatomb(uint32_t id, CondaOp &op);
 
     /**
      * @brief CONDA's greedy walk, seeded and with its lazy rule, run by the pipelined search;
