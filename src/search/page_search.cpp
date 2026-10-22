@@ -119,7 +119,8 @@ namespace pipeann {
       mem_index_->search_with_tags(query, mem_L, mem_L, mem_tags.data(), mem_dists.data());
       compute_and_add_to_retset(mem_tags.data(), std::min((unsigned) mem_L, (unsigned) l_search));
     } else {
-      compute_and_add_to_retset(&meta_.entry_point_id, 1);
+      const uint32_t start = this->randentry();
+      compute_and_add_to_retset(&start, 1);
     }
 
     std::sort(retset.begin(), retset.begin() + cur_list_size);

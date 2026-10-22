@@ -193,10 +193,11 @@ namespace pipeann {
       add_to_retset(mem_tags.data(), std::min<uint64_t>(mem_L, l_pool), mem_dists.data());
     } else {
       nbr_handler->initialize_query(query, query_buf);
-      nbr_handler->compute_dists(query_buf, &meta_.entry_point_id, 1);
-      PTRACE_IN("S0 0 %u %.9g", meta_.entry_point_id, (double) dist_scratch[0]);
-      retset[cur_list_size++] = Neighbor(meta_.entry_point_id, dist_scratch[0], true, false);
-      visited.insert(meta_.entry_point_id);
+      const uint32_t start = this->randentry();
+      nbr_handler->compute_dists(query_buf, &start, 1);
+      PTRACE_IN("S0 0 %u %.9g", start, (double) dist_scratch[0]);
+      retset[cur_list_size++] = Neighbor(start, dist_scratch[0], true, false);
+      visited.insert(start);
     }
 
     // --- IO pipeline ---

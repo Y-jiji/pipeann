@@ -556,6 +556,13 @@ namespace pipeann {
     void condaclear(uint32_t id);
 
     /**
+     * @brief A uniformly random vertex for a search to start from, drawn per call from this thread's generator:
+     *  under CONDA a live stored one, else one of the meta_.npoints the disk holds since the last merge
+     * @return the vertex id
+     */
+    uint32_t randentry();
+
+    /**
      * @brief The tombstone of a deleted vertex as edits of op: empty list, max vector, its code and head set
      * @param id the deleted vertex
      * @param op the operation the edits join

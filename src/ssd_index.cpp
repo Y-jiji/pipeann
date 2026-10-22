@@ -22,6 +22,8 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <functional>
+#include <random>
 #include <thread>
 #include "utils/tsl/robin_set.h"
 
@@ -1108,6 +1110,24 @@ namespace pipeann {
     // [1]
     params.beam_width = insert;
     params.delete_beam_width = remove;
+  }
+
+  template<typename T, typename TagT>
+  uint32_t SSDIndex<T, TagT>::randentry() {
+    // [1]
+    static thread_local std::mt19937_64 rng(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    if (params.conda != 0 && !condalive.empty()) {
+      std::uniform_int_distribution<uint64_t> pick(0, condalive.size() - 1);
+      for (;;) {
+        const uint32_t id = (uint32_t) pick(rng);
+        if (!condaout(id) && id < stored.size() && stored[id]) {
+          return id;
+        }
+      }
+    }
+    // [2]
+    std::uniform_int_distribution<uint64_t> pick(0, meta_.npoints - 1);
+    return (uint32_t) pick(rng);
   }
 
   template class SSDIndex<float>;

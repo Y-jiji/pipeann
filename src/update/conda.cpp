@@ -299,12 +299,13 @@ namespace pipeann {
   template<typename T, typename TagT>
   void SSDIndex<T, TagT>::condasearch(uint32_t self, CondaSeek seek, uint32_t listn, CondaOp &op,
                                       std::vector<Neighbor> &expanded, QueryStats *stats) {
-    // [1]
-    const std::vector<uint32_t> nbrs = condaget(condaep, op);
+    // [1] the walk starts from a random live vertex and its list
+    const uint32_t start = randentry();
+    const std::vector<uint32_t> nbrs = condaget(start, op);
     tsl::robin_set<uint32_t> seen, pushed;
     std::vector<uint32_t> init, seeds;
     if (seek != CondaSeek::HEAL) {
-      init.push_back(condaep);
+      init.push_back(start);
     }
     for (uint64_t i = 0; i < nbrs.size() && i + 1 < listn; ++i) {
       const uint32_t id = nbrs[i];
@@ -312,7 +313,7 @@ namespace pipeann {
         continue;
       }
       if (seek == CondaSeek::LAZY && condadead(id)) {
-        condaedit(condaep, CondaEdit{'D', id, {}}, op);
+        condaedit(start, CondaEdit{'D', id, {}}, op);
         seen.insert(id);
         continue;
       }
