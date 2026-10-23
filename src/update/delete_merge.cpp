@@ -271,6 +271,7 @@ namespace pipeann {
     merge_lock.lock();  // unlock in reload().
     // metadata.
     this->meta_.npoints = new_npoints;
+    this->lastid.store(meta_.npoints == 0 ? 0 : (uint32_t) (meta_.npoints - 1), std::memory_order_release);
     this->meta_.entry_point = id_map.find(meta_.entry_point);
     // PQ.
     auto tmp = this->nbr_handler;

@@ -429,6 +429,9 @@ namespace pipeann {
     std::vector<uint8_t> stored;
     /** @brief CONDA's entry point */
     uint32_t condaep = 0;
+    /** @brief The largest live id, stored at load and at each deletion compaction: merge_deletes, condadelete and
+     *  condaremove; entryid's start once 0 is out */
+    std::atomic<uint32_t> lastid{0};
     /** @brief CONDA's tag_lock_: id reservation and the tag maps */
     std::mutex condamu;
     /** @brief Held alone by a batch's first insert, shared by the rest */
@@ -556,11 +559,11 @@ namespace pipeann {
     void condaclear(uint32_t id);
 
     /**
-     * @brief A uniformly random vertex for a search to start from, drawn per call from this thread's generator:
-     *  under CONDA a live stored one, else one of the meta_.npoints the disk holds since the last merge
+     * @brief The vertex a search or CONDA walk starts from: 0, unless CONDA has consolidated 0 out, then lastid;
+     *  merge_deletes renumbers the survivors from 0, so without CONDA 0 is always live
      * @return the vertex id
      */
-    uint32_t randentry();
+    uint32_t entryid();
 
     /**
      * @brief The tombstone of a deleted vertex as edits of op: empty list, max vector, its code and head set

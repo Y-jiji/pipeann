@@ -230,7 +230,7 @@ namespace pipeann {
         coro_data.compute_and_add_to_retset(mem_tags.data(), std::min((unsigned) mem_L, (unsigned) l_search));
       } else {
         // Do not use optimized start point.
-        const uint32_t start = this->randentry();
+        const uint32_t start = this->entryid();
         coro_data.compute_and_add_to_retset(&start, 1);
       }
       std::sort(coro_data.retset.begin(), coro_data.retset.begin() + coro_data.cur_list_size);

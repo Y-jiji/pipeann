@@ -299,8 +299,8 @@ namespace pipeann {
   template<typename T, typename TagT>
   void SSDIndex<T, TagT>::condasearch(uint32_t self, CondaSeek seek, uint32_t listn, CondaOp &op,
                                       std::vector<Neighbor> &expanded, QueryStats *stats) {
-    // [1] the walk starts from a random live vertex and its list
-    const uint32_t start = randentry();
+    // [1] the walk starts from entryid's live vertex and its list
+    const uint32_t start = entryid();
     const std::vector<uint32_t> nbrs = condaget(start, op);
     tsl::robin_set<uint32_t> seen, pushed;
     std::vector<uint32_t> init, seeds;
@@ -749,6 +749,13 @@ namespace pipeann {
       condafree.push_back(gone[i]);
     }
     condagone.clear();
+    // [5] the largest live stored id, entryid's start once 0 is out
+    for (uint64_t at = cur_id.load(); at-- > 0;) {
+      if (!condaout((uint32_t) at) && at < stored.size() && stored[at]) {
+        lastid.store((uint32_t) at, std::memory_order_release);
+        break;
+      }
+    }
   }
 
   template<typename T, typename TagT>
@@ -780,7 +787,14 @@ namespace pipeann {
     }
     // [3] relink its in-neighbors and out-neighbors and write its tombstone, in one flush
     condarepair(id, true);
-    // [4] the tombstone on the free stack, for a later insert to reuse
+    // [4] the largest live stored id, entryid's start once 0 is out
+    for (uint64_t at = cur_id.load(); at-- > 0;) {
+      if (!condaout((uint32_t) at) && at < stored.size() && stored[at]) {
+        lastid.store((uint32_t) at, std::memory_order_release);
+        break;
+      }
+    }
+    // [5] the tombstone on the free stack, for a later insert to reuse
     std::lock_guard<std::mutex> guard(condamu);
     condafree.push_back(id);
     return true;

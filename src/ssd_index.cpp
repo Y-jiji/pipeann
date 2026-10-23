@@ -211,6 +211,7 @@ namespace pipeann {
 
     // load page layout.
     this->load_page_layout(index_prefix, meta_.nnodes_per_sector, meta_.npoints);
+    this->lastid.store(meta_.npoints == 0 ? 0 : (uint32_t) (meta_.npoints - 1), std::memory_order_release);
 
     // load tags
     if (this->enable_tags) {
@@ -1113,21 +1114,13 @@ namespace pipeann {
   }
 
   template<typename T, typename TagT>
-  uint32_t SSDIndex<T, TagT>::randentry() {
-    // [1]
-    static thread_local std::mt19937_64 rng(std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    if (params.conda != 0 && !condalive.empty()) {
-      std::uniform_int_distribution<uint64_t> pick(0, condalive.size() - 1);
-      for (;;) {
-        const uint32_t id = (uint32_t) pick(rng);
-        if (!condaout(id) && id < stored.size() && stored[id]) {
-          return id;
-        }
-      }
+  uint32_t SSDIndex<T, TagT>::entryid() {
+    // [1] under CONDA, 0 is out once a delete consolidated it
+    if (params.conda != 0 && !condalive.empty() && (condaout(0) || stored.empty() || !stored[0])) {
+      return lastid.load(std::memory_order_acquire);
     }
     // [2]
-    std::uniform_int_distribution<uint64_t> pick(0, meta_.npoints - 1);
-    return (uint32_t) pick(rng);
+    return 0;
   }
 
   template class SSDIndex<float>;

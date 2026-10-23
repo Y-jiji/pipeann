@@ -193,7 +193,7 @@ namespace pipeann {
       add_to_retset(mem_tags.data(), std::min<uint64_t>(mem_L, l_pool), mem_dists.data());
     } else {
       nbr_handler->initialize_query(query, query_buf);
-      const uint32_t start = this->randentry();
+      const uint32_t start = this->entryid();
       nbr_handler->compute_dists(query_buf, &start, 1);
       PTRACE_IN("S0 0 %u %.9g", start, (double) dist_scratch[0]);
       retset[cur_list_size++] = Neighbor(start, dist_scratch[0], true, false);
