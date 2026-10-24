@@ -22,6 +22,14 @@ namespace pipeann {
     return fixed;
   }
 
+  /** @brief PIPEANN_SEARCH_NOLOCK set: a query search takes no id lock around its reads, a diagnostic for
+   *  search-only runs, unsafe beside updates (#015)
+   *  @return whether the environment sets PIPEANN_SEARCH_NOLOCK */
+  static bool searchnolock() {
+    static const bool nolock = std::getenv("PIPEANN_SEARCH_NOLOCK") != nullptr;
+    return nolock;
+  }
+
   // Common pipelined search loop used by pipe_search, spec_postfilter_search, and spec_infilter_search.
   //
   // Template callbacks:
@@ -224,6 +232,7 @@ namespace pipeann {
       }
     };
     std::deque<io_t> on_flight_ios;
+    const bool locked = insert_ctx != nullptr || !searchnolock();
     auto &id_buf_map = *(query_buf->nodes);
     std::vector<int64_t> slot_owner(MAX_N_SECTOR_READS, -1);
     IORequest *queued[MAX_N_SECTOR_READS];  // reads chosen this round, sent together by send_best_read_req
@@ -232,7 +241,9 @@ namespace pipeann {
     auto send_read_req = [&](Neighbor &item) -> bool {
       PTRACE_REF("I %u", item.id);
       item.flag = false;
-      this->lock_idx(idx_lock_table, item.id, std::vector<uint32_t>(), true);
+      if (locked) {
+        this->lock_idx(idx_lock_table, item.id, std::vector<uint32_t>(), true);
+      }
       const unsigned loc = id2loc(item.id), pid = loc_sector_no(loc);
 
       uint64_t &cur_buf_idx = query_buf->sector_idx;
@@ -279,7 +290,9 @@ namespace pipeann {
         if (stats != nullptr) {
           stats->n_hops += 1;
         }
-        this->unlock_idx(idx_lock_table, io.nbr.id);
+        if (locked) {
+          this->unlock_idx(idx_lock_table, io.nbr.id);
+        }
         on_flight_ios.pop_front();
       }
       PTRACE_REF("P %u %u", n_in, n_out);
@@ -400,7 +413,9 @@ namespace pipeann {
           if (stats != nullptr) {
             stats->n_hops += 1;
           }
-          this->unlock_idx(idx_lock_table, io.nbr.id);
+          if (locked) {
+            this->unlock_idx(idx_lock_table, io.nbr.id);
+          }
           DiskNode<T> node = node_from_page((char *) io.read_req->buf, io.loc);
           const bool member = compute_exact_dists_and_push(node, io.nbr.id);
           for (unsigned i = 0; i < cur_list_size; ++i) {
