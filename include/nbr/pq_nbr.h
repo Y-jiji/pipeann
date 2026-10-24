@@ -196,6 +196,18 @@ namespace pipeann {
 
     inline void aggregate_coords(const unsigned *ids, const uint64_t n_ids, const uint8_t *all_coords,
                                  const uint64_t ndims, uint8_t *out) {
+      // [1] prefetch every code first, so the cache misses of random ids overlap
+      for (uint64_t i = 0; i < n_ids; i++) {
+        _mm_prefetch((const char *) (all_coords + ids[i] * ndims), _MM_HINT_T0);
+      }
+      // [2] a 16-byte code is one inlined load and store, others go through memcpy
+      if (ndims == 16) {
+        for (uint64_t i = 0; i < n_ids; i++) {
+          const __m128i code = _mm_loadu_si128((const __m128i *) (all_coords + ids[i] * 16));
+          _mm_storeu_si128((__m128i *) (out + i * 16), code);
+        }
+        return;
+      }
       for (uint64_t i = 0; i < n_ids; i++) {
         memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(uint8_t));
       }
