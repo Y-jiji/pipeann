@@ -151,7 +151,7 @@ namespace pipeann {
     /* Encode point as PQ code and store at data[loc * n_chunks]; resize data if needed \
      * `point`: raw vector of dimension pq_table.ndims \
      * `loc`: node location; used as the index into the global code table \
-     * Acquires pq_mu write lock; O(ndims) for deflation plus one possible resize
+     * Copies under the pq_mu shared lock when the slot fits, the write lock only to resize; O(ndims) for deflation
      */
     void insert(T *point, uint32_t loc) {
       std::vector<uint8_t> pq_coords(pq_table.n_chunks);
@@ -162,6 +162,17 @@ namespace pipeann {
       pq_table.deflate_vec(fp_vec.data(), pq_coords.data());
 
       uint64_t pq_offset = loc * pq_table.n_chunks;
+      pq_mu.lock_shared();
+      if (likely(this->data.size() >= pq_offset + pq_table.n_chunks)) {
+        memcpy(this->data.data() + pq_offset, pq_coords.data(), pq_table.n_chunks);
+        uint64_t seen = __atomic_load_n(&this->npoints, __ATOMIC_RELAXED);
+        while (seen < loc + 1ul &&
+               !__atomic_compare_exchange_n(&this->npoints, &seen, loc + 1ul, true, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+        }
+        pq_mu.unlock_shared();
+        return;
+      }
+      pq_mu.unlock_shared();
       {
         pq_mu.lock();
         if (this->data.size() < pq_offset + pq_table.n_chunks) {

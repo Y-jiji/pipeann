@@ -578,7 +578,16 @@ namespace pipeann {
       std::shared_mutex mutex;
       char padding[128 - sizeof(std::shared_mutex)];
     } locks_[N];
-    void lock_shared(size_t idx = omp_get_thread_num()) {
+    /** @brief A per-thread lock index, assigned round robin on a thread's first call; omp_get_thread_num is 0 outside
+     *  OpenMP, which put every plain thread's shared lock on one mutex.
+     *  @return the calling thread's index
+     */
+    static size_t slot() {
+      static std::atomic<size_t> next{0};
+      thread_local const size_t mine = next.fetch_add(1, std::memory_order_relaxed);
+      return mine;
+    }
+    void lock_shared(size_t idx = slot()) {
       locks_[idx % N].mutex.lock_shared();
     }
     void lock() {
@@ -586,7 +595,7 @@ namespace pipeann {
         locks_[i].mutex.lock();
       }
     }
-    void unlock_shared(size_t idx = omp_get_thread_num()) {
+    void unlock_shared(size_t idx = slot()) {
       locks_[idx % N].mutex.unlock_shared();
     }
     void unlock() {
