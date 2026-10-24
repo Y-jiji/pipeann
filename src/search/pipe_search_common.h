@@ -7,10 +7,14 @@
 
 #include "utils/pipe_trace.h"
 
+#include <algorithm>
+#include <deque>
+
 namespace pipeann {
 
-  /** @brief PIPEANN_FIXED_BEAM_WIDTH set: a search keeps beam_width reads in flight from its start, refilling
-   *  every round with no waste check, as fnct's beam search does (#015 diagnostic)
+  /** @brief PIPEANN_FIXED_BEAM_WIDTH set: a search runs fnct's beam search, beam_width reads in flight from its
+   *  start, each read expanded as it completes, even one the pool has dropped, before the next best unread is
+   *  issued, until no read is in flight and none is unread (#015)
    *  @return whether the environment sets PIPEANN_FIXED_BEAM_WIDTH */
   static bool fixedbeam() {
     static const bool fixed = std::getenv("PIPEANN_FIXED_BEAM_WIDTH") != nullptr;
@@ -29,6 +33,8 @@ namespace pipeann {
   //     Exact membership verification after reading a node from disk.
   //     pipe_search: always return true.
   //     filter search: selector->is_member(id, query_attrs, target_attrs).
+  //
+  // SHAME(TALLFUNC) SHAME(WIDEFUNC) SHAME(MANYARG)
   //
   template<typename T, typename TagT>
   template<typename SpecFn, typename VerifyFn>
@@ -216,7 +222,7 @@ namespace pipeann {
         return read_req->finished;
       }
     };
-    std::queue<io_t> on_flight_ios;
+    std::deque<io_t> on_flight_ios;
     auto &id_buf_map = *(query_buf->nodes);
     std::vector<int64_t> slot_owner(MAX_N_SECTOR_READS, -1);
     IORequest *queued[MAX_N_SECTOR_READS];  // reads chosen this round, sent together by send_best_read_req
@@ -244,7 +250,7 @@ namespace pipeann {
                       sector_scratch);
       queued[n_queued++] = &req;
 
-      on_flight_ios.push(io_t{item, pid, loc, &req});
+      on_flight_ios.push_back(io_t{item, pid, loc, &req});
       cur_buf_idx = (cur_buf_idx + 1) % MAX_N_SECTOR_READS;
 
       if (stats != nullptr) {
@@ -273,7 +279,7 @@ namespace pipeann {
           stats->n_hops += 1;
         }
         this->unlock_idx(idx_lock_table, io.nbr.id);
-        on_flight_ios.pop();
+        on_flight_ios.pop_front();
       }
       PTRACE_REF("P %u %u", n_in, n_out);
       return std::make_pair(n_in, n_out);
@@ -373,37 +379,78 @@ namespace pipeann {
       }
     }
 
-    int cur_n_in = 0, cur_tot = 0;
-    while (!terminate()) {
-      auto [n_in, n_out] = poll_all();
-      std::ignore = n_in;
-      std::ignore = n_out;
-
-      if (!fixedbeam() && max_marker >= 5 && n_in + n_out > 0) {
-        cur_n_in += n_in;
-        cur_tot += n_in + n_out;
-        constexpr double kWasteThreshold = 0.1;
-        if ((cur_tot - cur_n_in) * 1.0 / cur_tot <= kWasteThreshold) {
-          cur_beam_width = cur_beam_width + 1;
-          cur_beam_width = std::max(cur_beam_width, 4l);
-          cur_beam_width = std::min((int64_t) beam_width, cur_beam_width);
+    if (fixedbeam()) {
+      auto finished = [](io_t &io) { return io.finished(); };
+      while (!on_flight_ios.empty()) {
+        // [1] reap completions
+        if (insert_ctx != nullptr) {
+          reader->poll_alloc(ctx, &insert_ctx->page_ref);
+        } else {
+          reader->poll(ctx);
+        }
+        auto it = std::find_if(on_flight_ios.begin(), on_flight_ios.end(), finished);
+        while (it != on_flight_ios.end()) {
+          // [2] expand the read at once, in or out of the pool: its exact distance, then its neighbors
+          const io_t io = *it;
+          on_flight_ios.erase(it);
+          if (insert_ctx != nullptr) {
+            insert_ctx->hint_pages.push_back(io.page_id);
+          }
+          if (stats != nullptr) {
+            stats->n_hops += 1;
+          }
+          this->unlock_idx(idx_lock_table, io.nbr.id);
+          DiskNode<T> node = node_from_page((char *) io.read_req->buf, io.loc);
+          const bool member = compute_exact_dists_and_push(node, io.nbr.id);
+          for (unsigned i = 0; i < cur_list_size; ++i) {
+            if (retset[i].id == io.nbr.id) {
+              retset[i].flag = false;
+              retset[i].visited = true;
+              retset[i].is_member = member;
+              break;
+            }
+          }
+          unsigned nk = cur_list_size;
+          compute_and_push_nbrs(node, nk);
+          // [3] refill to beam_width from the best unread
+          if (on_flight_ios.size() < beam_width) {
+            send_best_read_req((uint32_t) (beam_width - on_flight_ios.size()));
+          }
+          it = std::find_if(on_flight_ios.begin(), on_flight_ios.end(), finished);
         }
       }
+    } else {
+      int cur_n_in = 0, cur_tot = 0;
+      while (!terminate()) {
+        auto [n_in, n_out] = poll_all();
+        std::ignore = n_in;
+        std::ignore = n_out;
 
-      if ((int64_t) on_flight_ios.size() < cur_beam_width) {
-        const int64_t room = cur_beam_width - (int64_t) on_flight_ios.size();
-        send_best_read_req(fixedbeam() ? (uint32_t) room : 1);
+        if (max_marker >= 5 && n_in + n_out > 0) {
+          cur_n_in += n_in;
+          cur_tot += n_in + n_out;
+          constexpr double kWasteThreshold = 0.1;
+          if ((cur_tot - cur_n_in) * 1.0 / cur_tot <= kWasteThreshold) {
+            cur_beam_width = cur_beam_width + 1;
+            cur_beam_width = std::max(cur_beam_width, 4l);
+            cur_beam_width = std::min((int64_t) beam_width, cur_beam_width);
+          }
+        }
+
+        if ((int64_t) on_flight_ios.size() < cur_beam_width) {
+          send_best_read_req(1);
+        }
+        marker = calc_best_node();
+        max_marker = std::max(max_marker, marker);
+        PTRACE_REF("B %ld %u %u", (long) cur_beam_width, marker, max_marker);
       }
-      marker = calc_best_node();
-      max_marker = std::max(max_marker, marker);
-      PTRACE_REF("B %ld %u %u", (long) cur_beam_width, marker, max_marker);
-    }
 
-    // Drain remaining in-flight IOs.
-    while (!on_flight_ios.empty()) {
-      poll_all();
+      // Drain remaining in-flight IOs.
+      while (!on_flight_ios.empty()) {
+        poll_all();
+      }
+      calc_best_node();
     }
-    calc_best_node();
 
     auto cpu2_ed = std::chrono::high_resolution_clock::now();
     if (stats != nullptr) {
