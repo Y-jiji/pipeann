@@ -12,9 +12,10 @@
 
 namespace pipeann {
 
-  /** @brief PIPEANN_FIXED_BEAM_WIDTH set: a search runs fnct's beam search, beam_width reads in flight from its
-   *  start, each read expanded as it completes, even one the pool has dropped, before the next best unread is
-   *  issued, until no read is in flight and none is unread (#015)
+  /** @brief PIPEANN_FIXED_BEAM_WIDTH set: a query search runs fnct's beam search, beam_width reads in flight from
+   *  its start, each read expanded as it completes, even one the pool has dropped, before the next best unread
+   *  is issued, until no read is in flight and none is unread; an insert's search keeps beam_width reads in
+   *  flight, refilled every round (#015)
    *  @return whether the environment sets PIPEANN_FIXED_BEAM_WIDTH */
   static bool fixedbeam() {
     static const bool fixed = std::getenv("PIPEANN_FIXED_BEAM_WIDTH") != nullptr;
@@ -379,7 +380,7 @@ namespace pipeann {
       }
     }
 
-    if (fixedbeam()) {
+    if (fixedbeam() && insert_ctx == nullptr) {
       auto finished = [](io_t &io) { return io.finished(); };
       while (!on_flight_ios.empty()) {
         // [1] reap completions
@@ -426,7 +427,7 @@ namespace pipeann {
         std::ignore = n_in;
         std::ignore = n_out;
 
-        if (max_marker >= 5 && n_in + n_out > 0) {
+        if (!fixedbeam() && max_marker >= 5 && n_in + n_out > 0) {
           cur_n_in += n_in;
           cur_tot += n_in + n_out;
           constexpr double kWasteThreshold = 0.1;
@@ -438,7 +439,8 @@ namespace pipeann {
         }
 
         if ((int64_t) on_flight_ios.size() < cur_beam_width) {
-          send_best_read_req(1);
+          const int64_t room = cur_beam_width - (int64_t) on_flight_ios.size();
+          send_best_read_req(fixedbeam() ? (uint32_t) room : 1);
         }
         marker = calc_best_node();
         max_marker = std::max(max_marker, marker);
