@@ -30,6 +30,14 @@ namespace pipeann {
     return nolock;
   }
 
+  /** @brief PIPEANN_INSERT_FNCT set beside PIPEANN_FIXED_BEAM_WIDTH: an insert's search runs fnct's beam search as a
+   *  query's does, its reads kept in the node map for the insert, the CONDA repair path untested on it (#015)
+   *  @return whether the environment sets PIPEANN_INSERT_FNCT */
+  static bool insertfnct() {
+    static const bool fnct = std::getenv("PIPEANN_INSERT_FNCT") != nullptr;
+    return fnct;
+  }
+
   // Common pipelined search loop used by pipe_search, spec_postfilter_search, and spec_infilter_search.
   //
   // Template callbacks:
@@ -393,7 +401,7 @@ namespace pipeann {
       }
     }
 
-    if (fixedbeam() && insert_ctx == nullptr) {
+    if (fixedbeam() && (insert_ctx == nullptr || insertfnct())) {
       auto finished = [](io_t &io) { return io.finished(); };
       while (!on_flight_ios.empty()) {
         // [1] reap completions
@@ -408,6 +416,7 @@ namespace pipeann {
           const io_t io = *it;
           on_flight_ios.erase(it);
           if (insert_ctx != nullptr) {
+            id_buf_map.insert(io.nbr.id, NodeAt{(char *) io.read_req->buf, io.loc});
             insert_ctx->hint_pages.push_back(io.page_id);
           }
           if (stats != nullptr) {
