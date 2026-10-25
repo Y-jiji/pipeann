@@ -255,6 +255,9 @@ namespace pipeann {
       const unsigned loc = id2loc(item.id), pid = loc_sector_no(loc);
 
       uint64_t &cur_buf_idx = query_buf->sector_idx;
+      while (slot_owner[cur_buf_idx] >= 0 && !query_buf->reqs[cur_buf_idx].finished) {
+        cur_buf_idx = (cur_buf_idx + 1) % MAX_N_SECTOR_READS;
+      }
       const int64_t owner = slot_owner[cur_buf_idx];
       if (owner >= 0 && id_buf_map.erase((unsigned) owner)) {
         for (unsigned i = 0; i < cur_list_size; ++i) {
@@ -268,6 +271,7 @@ namespace pipeann {
       auto &req = query_buf->reqs[cur_buf_idx];
       req = IORequest(static_cast<uint64_t>(pid) * SECTOR_LEN, read_io_size, buf, u_loc_offset(loc), meta_.max_node_len,
                       sector_scratch);
+      req.finished = false;
       queued[n_queued++] = &req;
 
       on_flight_ios.push_back(io_t{item, pid, loc, &req});
