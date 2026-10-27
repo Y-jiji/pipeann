@@ -88,11 +88,7 @@ namespace pipeann {
         }
 
         uint64_t tag = id2tag(id);
-        if (deleted_nodes_set.find(tag) == deleted_nodes_set.end()) {  // 2. not deleted, alloc ID.
-          // allocate ID.
-          uint64_t new_id = new_npoints.fetch_add(1);
-          id_map.insert(id, new_id);
-          rev_id_map.insert(new_id, id);
+        if (deleted_nodes_set.find(tag) == deleted_nodes_set.end()) {  // 2. not deleted, ID allocated below.
           continue;
         }
 
@@ -113,6 +109,16 @@ namespace pipeann {
           nhood.resize(n_sampled_nbrs);  // nearest.
         }
         deleted_nhoods.insert(id, nhood);
+      }
+      // [1] new IDs in location order, so each window step 2 writes back holds only records it has written
+      for (uint64_t loc = loc_st; loc < loc_ed; ++loc) {
+        uint64_t id = loc2id(loc);
+        if (id == kInvalidID || deleted_nodes_set.find(id2tag(id)) != deleted_nodes_set.end()) {
+          continue;
+        }
+        uint64_t new_id = new_npoints.fetch_add(1);
+        id_map.insert(id, new_id);
+        rev_id_map.insert(new_id, id);
       }
     }
     LOG(INFO) << "Finished populating neighborhoods, totally elapsed: " << delete_timer.elapsed() / 1e3
